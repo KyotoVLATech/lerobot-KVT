@@ -68,9 +68,9 @@ dependencies = [
     "pyzmq>=26.2.1",
     "rerun-sdk>=0.21.0",
     "termcolor>=2.4.0",
-    "torch>=2.2.1,<2.7",
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
     "torchcodec==0.2.1; sys_platform != 'win32' and (sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l')) and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
-    "torchvision>=0.21.0",
     "wandb>=0.16.3",
     "zarr>=2.17.0",
 ]
@@ -136,3 +136,16 @@ default.extend-ignore-identifiers-re = [
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
