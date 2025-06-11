@@ -384,12 +384,16 @@ class SmolVLAPolicy(PreTrainedPolicy):
         return images, img_masks
 
     def prepare_language(self, batch) -> tuple[Tensor, Tensor]:
-        """Tokenize the text input"""
+        """テキスト入力をトークナイズし、バッチサイズと揃える"""
         device = batch[OBS_STATE].device
         tasks = batch["task"]
-        if len(tasks) == 1:
-            tasks = [tasks[0] for _ in range(batch[OBS_STATE].shape[0])]
-
+        batch_size = batch[OBS_STATE].shape[0]
+        # tasksがstrならリスト化
+        if isinstance(tasks, str):
+            tasks = [tasks]
+        # tasksの長さがバッチサイズと異なる場合は複製
+        if len(tasks) != batch_size:
+            tasks = [tasks[0] for _ in range(batch_size)]
         tasks = [task if task.endswith("\n") else f"{task}\n" for task in tasks]
         tokenized_prompt = self.language_tokenizer.__call__(
             tasks,
@@ -558,6 +562,8 @@ class VLAFlowMatching(nn.Module):
         embs = []
         pad_masks = []
         att_masks = []
+        # バッチサイズを統一するために取得
+        batch_size = images[0].shape[0]
         for _img_idx, (
             img,
             img_mask,
@@ -570,6 +576,9 @@ class VLAFlowMatching(nn.Module):
                     .unsqueeze(0)
                     .expand(img.shape[0], -1, -1)
                 )
+                # バッチサイズを統一
+                if image_start_token.shape[0] != batch_size:
+                    image_start_token = image_start_token.expand(batch_size, -1, -1)
                 image_start_mask = torch.ones_like(
                     image_start_token[:, :, 0], dtype=torch.bool, device=image_start_token.device
                 )
@@ -584,9 +593,18 @@ class VLAFlowMatching(nn.Module):
             img_emb_dim = img_emb.shape[-1]
             img_emb = img_emb * torch.tensor(img_emb_dim**0.5, dtype=img_emb.dtype, device=img_emb.device)
 
+            # 特徴次元をhidden_sizeに揃える
+            hidden_size = self.vlm_with_expert.config.text_config.hidden_size
+            img_emb = pad_vector(img_emb, hidden_size)
+
             bsize, num_img_embs = img_emb.shape[:2]
             img_mask = img_mask[:, None].expand(bsize, num_img_embs)
 
+            # バッチサイズを統一
+            if img_emb.shape[0] != batch_size:
+                img_emb = img_emb.expand(batch_size, *img_emb.shape[1:])
+            if img_mask.shape[0] != batch_size:
+                img_mask = img_mask.expand(batch_size, *img_mask.shape[1:])
             embs.append(img_emb)
             pad_masks.append(img_mask)
 
@@ -599,6 +617,9 @@ class VLAFlowMatching(nn.Module):
                     .unsqueeze(0)
                     .expand(img.shape[0], -1, -1)
                 )
+                # バッチサイズを統一
+                if image_end_token.shape[0] != batch_size:
+                    image_end_token = image_end_token.expand(batch_size, -1, -1)
                 image_end_mask = torch.ones_like(
                     image_end_token[:, :, 0], dtype=torch.bool, device=image_end_token.device
                 )
@@ -610,6 +631,21 @@ class VLAFlowMatching(nn.Module):
         lang_emb_dim = lang_emb.shape[-1]
         lang_emb = lang_emb * math.sqrt(lang_emb_dim)
 
+        # 特徴次元をhidden_sizeに揃える
+        hidden_size = self.vlm_with_expert.config.text_config.hidden_size
+        lang_emb = pad_vector(lang_emb, hidden_size)
+        # バッチサイズを統一
+        if lang_emb.shape[0] != batch_size:
+            if lang_emb.shape[0] == 1:
+                lang_emb = lang_emb.repeat(batch_size, 1, 1)
+            else:
+                raise RuntimeError(f"lang_emb のバッチサイズ {lang_emb.shape[0]} が batch_size {batch_size} と一致しません")
+        if lang_masks.shape[0] != batch_size:
+            if lang_masks.shape[0] == 1:
+                lang_masks = lang_masks.repeat(batch_size, 1)
+            else:
+                raise RuntimeError(f"lang_masks のバッチサイズ {lang_masks.shape[0]} が batch_size {batch_size} と一致しません")
+
         embs.append(lang_emb)
         pad_masks.append(lang_masks)
 
@@ -618,6 +654,14 @@ class VLAFlowMatching(nn.Module):
 
         state_emb = self.state_proj(state)
         state_emb = state_emb[:, None, :] if state_emb.ndim == 2 else state_emb
+
+        # 特徴次元をhidden_sizeに揃える
+        hidden_size = self.vlm_with_expert.config.text_config.hidden_size
+        state_emb = pad_vector(state_emb, hidden_size)
+        # バッチサイズを統一
+        if state_emb.shape[0] != batch_size:
+            state_emb = state_emb.expand(batch_size, *state_emb.shape[1:])
+
         embs.append(state_emb)
         bsize = state_emb.shape[0]
         device = state_emb.device
