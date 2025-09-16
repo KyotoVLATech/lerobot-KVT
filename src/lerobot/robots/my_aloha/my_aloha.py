@@ -10,6 +10,7 @@ from lerobot.motors.dynamixel import (
     DynamixelMotorsBus,
     OperatingMode,
 )
+from lerobot.motors.robstride import RobStride
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
 from .config_my_aloha import MyAlohaConfig
@@ -27,190 +28,174 @@ class MyAloha(Robot):
     ):
         super().__init__(config)
         self.config = config
-        self.bus = DynamixelMotorsBus(
-            port=self.config.port,
+        self.dbus_r = DynamixelMotorsBus(
+            port=self.config.u2d2_port1,
             motors={
                 "waist_R": Motor(1, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "shoulder_R": Motor(2, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "elbow_shadow_R": Motor(5, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "forearm_roll_R": Motor(6, "xm540-w270", MotorNormMode.RANGE_M100_100),
                 "wrist_angle_R": Motor(7, "xm540-w270", MotorNormMode.RANGE_M100_100),
                 "wrist_rotate_R": Motor(8, "xm430-w350", MotorNormMode.RANGE_M100_100),
                 "gripper_R": Motor(9, "xm430-w350", MotorNormMode.RANGE_0_100),
+            },
+        )
+        self.dbus_l = DynamixelMotorsBus(
+            port=self.config.u2d2_port2,
+            motors={
                 "waist_L": Motor(1, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "shoulder_L": Motor(2, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "elbow_shadow_L": Motor(5, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "forearm_roll_L": Motor(6, "xm540-w270", MotorNormMode.RANGE_M100_100),
                 "wrist_angle_L": Motor(7, "xm540-w270", MotorNormMode.RANGE_M100_100),
                 "wrist_rotate_L": Motor(8, "xm430-w350", MotorNormMode.RANGE_M100_100),
                 "gripper_L": Motor(9, "xm430-w350", MotorNormMode.RANGE_0_100),
             },
         )
-        self.cameras = make_cameras_from_configs(config.cameras)
-
-    @property
-    def _motors_ft(self) -> dict[str, type]:
-        return {f"{motor}.pos": float for motor in self.bus.motors}
-
-    @property
-    def _cameras_ft(self) -> dict[str, tuple]:
-        return {
-            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
+        self.robstride = {
+            "shoulder_R": RobStride(port=self.config.can_port1, motor_id=1),
+            "elbow_R": RobStride(port=self.config.can_port1, motor_id=5),
+            "forearm_roll_R": RobStride(port=self.config.can_port1, motor_id=6),
+            "shoulder_L": RobStride(port=self.config.can_port2, motor_id=2),
+            "elbow_L": RobStride(port=self.config.can_port2, motor_id=5),
+            "forearm_roll_L": RobStride(port=self.config.can_port2, motor_id=6),
         }
+        # self.cameras = make_cameras_from_configs(config.cameras)
+        self.is_connected = False
 
-    @cached_property
-    def observation_features(self) -> dict[str, type | tuple]:
-        return {**self._motors_ft, **self._cameras_ft}
-
-    @cached_property
-    def action_features(self) -> dict[str, type]:
-        return self._motors_ft
-
-    @property
-    def is_connected(self) -> bool:
-        return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
-
-    def connect(self, calibrate: bool = True) -> None:
-        """
-        We assume that at connection time, arm is in a rest position,
-        and torque can be safely disabled to run calibration.
-        """
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
-
-        self.bus.connect()
-        if not self.is_calibrated and calibrate:
-            self.calibrate()
-
-        for cam in self.cameras.values():
-            cam.connect()
-
+    def connect(self) -> None:
+        # Dynamixelバスを接続
+        self.dbus_r.connect()
+        self.dbus_l.connect()
+        
+        # RobStrideモーターを接続・有効化
+        for motor_name, motor in self.robstride.items():
+            try:
+                if motor.connect():
+                    motor.enable()
+                    logger.info(f"RobStrideモーター {motor_name} 接続・有効化完了")
+                else:
+                    logger.error(f"RobStrideモーター {motor_name} の接続に失敗")
+            except Exception as e:
+                logger.error(f"RobStrideモーター {motor_name} の接続エラー: {e}")
+        
         self.configure()
-        logger.info(f"{self} connected.")
-
-    @property
-    def is_calibrated(self) -> bool:
-        return self.bus.is_calibrated
-
-    def calibrate(self) -> None:
-        logger.info(f"\nRunning calibration of {self}")
-        self.bus.disable_torque()
-        for motor in self.bus.motors:
-            self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
-
-        input("Move robot to the middle of its range of motion and press ENTER....")
-        homing_offsets = self.bus.set_half_turn_homings()
-
-        full_turn_motors = ["shoulder_pan", "wrist_roll"]
-        unknown_range_motors = [motor for motor in self.bus.motors if motor not in full_turn_motors]
-        print(
-            f"Move all joints except {full_turn_motors} sequentially through their entire "
-            "ranges of motion.\nRecording positions. Press ENTER to stop..."
-        )
-        range_mins, range_maxes = self.bus.record_ranges_of_motion(unknown_range_motors)
-        for motor in full_turn_motors:
-            range_mins[motor] = 0
-            range_maxes[motor] = 4095
-
-        self.calibration = {}
-        for motor, m in self.bus.motors.items():
-            self.calibration[motor] = MotorCalibration(
-                id=m.id,
-                drive_mode=0,
-                homing_offset=homing_offsets[motor],
-                range_min=range_mins[motor],
-                range_max=range_maxes[motor],
-            )
-
-        self.bus.write_calibration(self.calibration)
-        self._save_calibration()
-        logger.info(f"Calibration saved to {self.calibration_fpath}")
+        self.is_connected = True
 
     def configure(self) -> None:
-        with self.bus.torque_disabled():
-            self.bus.configure_motors()
-
-            # Set secondary/shadow ID for shoulder and elbow. These joints have two motors.
-            # As a result, if only one of them is required to move to a certain position,
-            # the other will follow. This is to avoid breaking the motors.
-            self.bus.write("Secondary_ID", "shoulder_shadow", 2)
-            self.bus.write("Secondary_ID", "elbow_shadow", 4)
-
-            # Set a velocity limit of 131 as advised by Trossen Robotics
-            # TODO(aliberts): remove as it's actually useless in position control
-            self.bus.write("Velocity_Limit", 131)
-
-            # Use 'extended position mode' for all motors except gripper, because in joint mode the servos
-            # can't rotate more than 360 degrees (from 0 to 4095) And some mistake can happen while assembling
-            # the arm, you could end up with a servo with a position 0 or 4095 at a crucial point.
-            # See: https://emanual.robotis.com/docs/en/dxl/x/x_series/#operating-mode11
-            for motor in self.bus.motors:
-                if motor != "gripper":
-                    self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
-
-            # Use 'position control current based' for follower gripper to be limited by the limit of the
-            # current. It can grasp an object without forcing too much even tho, it's goal position is a
-            # complete grasp (both gripper fingers are ordered to join and reach a touch).
-            self.bus.write("Operating_Mode", "gripper", OperatingMode.CURRENT_POSITION.value)
-
-    def get_observation(self) -> dict[str, Any]:
-        """The returned observations do not have a batch dimension."""
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
-        obs_dict = {}
-
-        # Read arm position
-        start = time.perf_counter()
-        obs_dict[OBS_STATE] = self.bus.sync_read("Present_Position")
-        obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
-        dt_ms = (time.perf_counter() - start) * 1e3
-        logger.debug(f"{self} read state: {dt_ms:.1f}ms")
-
-        # Capture images from cameras
-        for cam_key, cam in self.cameras.items():
-            start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
-            dt_ms = (time.perf_counter() - start) * 1e3
-            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
-
-        return obs_dict
+        with self.dbus_r.torque_disabled(), self.dbus_l.torque_disabled():
+            # Dynamixel右腕
+            self.dbus_r.configure_motors()
+            self.dbus_r.write("Velocity_Limit", 131)
+            for motor in self.dbus_r.motors:
+                if motor != "gripper_R":
+                    self.dbus_r.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+            self.dbus_r.write("Operating_Mode", "gripper_R", OperatingMode.CURRENT_POSITION.value)
+            
+            # Dynamixel左腕
+            self.dbus_l.configure_motors()
+            self.dbus_l.write("Velocity_Limit", 131)
+            for motor in self.dbus_l.motors:
+                if motor != "gripper_L":
+                    self.dbus_l.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+            self.dbus_l.write("Operating_Mode", "gripper_L", OperatingMode.CURRENT_POSITION.value)
+        
+        # RobStrideモーターをPP（Position Profile）モードに設定
+        for motor_name, motor in self.robstride.items():
+            try:
+                motor.set_mode_pp()
+                motor.set_pp_velocity(2.0)  # 2.0 rad/s の速度制限
+                motor.set_pp_acceleration(5.0)  # 5.0 rad/s^2 の加速度
+                logger.info(f"RobStrideモーター {motor_name} をPPモードに設定")
+            except Exception as e:
+                logger.warning(f"RobStrideモーター {motor_name} の設定エラー: {e}")
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
-        """Command arm to move to a target joint configuration.
-
-        The relative action magnitude may be clipped depending on the configuration parameter
-        `max_relative_target`. In this case, the action sent differs from original action.
-        Thus, this function always returns the action actually sent.
-
-        Args:
-            action (dict[str, float]): The goal positions for the motors.
-
-        Returns:
-            dict[str, float]: The action sent to the motors, potentially clipped.
-        """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-
-        goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
-
-        # Cap goal position when too far away from present position.
-        # /!\ Slower fps expected due to reading from the follower.
-        if self.config.max_relative_target is not None:
-            present_pos = self.bus.sync_read("Present_Position")
-            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
-            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
-
-        # Send goal position to the arm
-        self.bus.sync_write("Goal_Position", goal_pos)
-        return {f"{motor}.pos": val for motor, val in goal_pos.items()}
+        
+        # .posサフィックスを削除してアクションを正規化
+        normalized_action = {}
+        for key, value in action.items():
+            motor_name = key.replace(".pos", "") if key.endswith(".pos") else key
+            normalized_action[motor_name] = value
+        
+        # DynamixelとRobStrideモーターに分離
+        dynamixel_actions_r = {}
+        dynamixel_actions_l = {}
+        robstride_actions = {}
+        
+        for motor_name, target_pos in normalized_action.items():
+            if motor_name in self.dbus_r.motors:
+                dynamixel_actions_r[motor_name] = target_pos
+            elif motor_name in self.dbus_l.motors:
+                dynamixel_actions_l[motor_name] = target_pos
+            elif motor_name in self.robstride:
+                robstride_actions[motor_name] = target_pos
+        
+        sent_actions = {}
+        
+        # Dynamixel右腕の制御
+        if dynamixel_actions_r:
+            if self.config.max_relative_target is not None:
+                present_pos_r = self.dbus_r.sync_read("Present_Position")
+                goal_present_pos_r = {key: (target_pos, present_pos_r[key]) 
+                                    for key, target_pos in dynamixel_actions_r.items()}
+                safe_goal_pos_r = ensure_safe_goal_position(goal_present_pos_r, self.config.max_relative_target)
+            else:
+                safe_goal_pos_r = dynamixel_actions_r
+            
+            self.dbus_r.sync_write("Goal_Position", safe_goal_pos_r)
+            sent_actions.update(safe_goal_pos_r)
+        
+        # Dynamixel左腕の制御
+        if dynamixel_actions_l:
+            if self.config.max_relative_target is not None:
+                present_pos_l = self.dbus_l.sync_read("Present_Position")
+                goal_present_pos_l = {key: (target_pos, present_pos_l[key]) 
+                                    for key, target_pos in dynamixel_actions_l.items()}
+                safe_goal_pos_l = ensure_safe_goal_position(goal_present_pos_l, self.config.max_relative_target)
+            else:
+                safe_goal_pos_l = dynamixel_actions_l
+            
+            self.dbus_l.sync_write("Goal_Position", safe_goal_pos_l)
+            sent_actions.update(safe_goal_pos_l)
+        
+        # RobStrideモーターの制御
+        for motor_name, target_pos in robstride_actions.items():
+            try:
+                motor = self.robstride[motor_name]
+                motor.set_target_position(target_pos)
+                sent_actions[motor_name] = target_pos
+            except Exception as e:
+                logger.warning(f"RobStrideモーター {motor_name} の制御に失敗: {e}")
+        
+        return sent_actions
 
     def disconnect(self):
+        """全てのモーターとの接続を安全に切断します"""
         if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
-        self.bus.disconnect(self.config.disable_torque_on_disconnect)
-        for cam in self.cameras.values():
-            cam.disconnect()
-
-        logger.info(f"{self} disconnected.")
+            return
+        
+        try:
+            # RobStrideモーターを停止・切断
+            for motor_name, motor in self.robstride.items():
+                try:
+                    # 目標位置を現在位置に設定して停止
+                    motor.set_target_position(0.0)
+                    motor.disable()
+                    motor.disconnect()
+                    logger.info(f"RobStrideモーター {motor_name} を切断しました")
+                except Exception as e:
+                    logger.warning(f"RobStrideモーター {motor_name} の切断に失敗: {e}")
+            
+            # Dynamixelバスを切断
+            try:
+                self.dbus_r.disconnect()
+                logger.info("Dynamixel右腕バスを切断しました")
+            except Exception as e:
+                logger.warning(f"Dynamixel右腕バスの切断に失敗: {e}")
+            
+            try:
+                self.dbus_l.disconnect()
+                logger.info("Dynamixel左腕バスを切断しました")
+            except Exception as e:
+                logger.warning(f"Dynamixel左腕バスの切断に失敗: {e}")
+        
+        finally:
+            self.is_connected = False
+            logger.info("MyAlohaロボットとの接続を切断しました")
