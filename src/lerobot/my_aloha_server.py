@@ -6,6 +6,7 @@ import socket
 import json
 import struct
 import threading
+import numpy as np
 from typing import Optional
 from lerobot.robots.my_aloha import MyAloha, MyAlohaConfig
 
@@ -24,12 +25,11 @@ class RobotCommunicationNode:
         """MyAlohaロボットの初期化"""
         try:
             config = MyAlohaConfig(
-                u2d2_port1="/dev/ttyUSB0",
-                u2d2_port2="/dev/ttyUSB1",
-                can_port1="/dev/ttyACM0",
-                can_port2="/dev/ttyACM1",
-                max_relative_target=5.0,
-                # cameras={}
+                right_robstride_port="COM3",
+                left_robstride_port="COM4",
+                right_dynamixel_port="COM5",
+                left_dynamixel_port="COM6",
+                max_relative_target=0.1,
             )
             self.robot = MyAloha(config)
             self.robot.connect()
@@ -149,7 +149,16 @@ class RobotCommunicationNode:
                             offset = 1 + i * 4
                             angle = struct.unpack('<f', data[offset:offset+4])[0]
                             joint_angles.append(angle)
-                        
+                        joint_angles[0] -= np.pi / 2
+                        joint_angles[1] -= np.pi / 2
+                        joint_angles[2] = -joint_angles[2] - np.pi / 2
+                        joint_angles[3] = -joint_angles[3]
+                        joint_angles[5] = -joint_angles[5]
+                        joint_angles[7] += np.pi / 2
+                        joint_angles[8] -= np.pi / 2
+                        joint_angles[9] = -joint_angles[9] - np.pi / 2
+                        joint_angles[10] = -joint_angles[10]
+                        joint_angles[12] = -joint_angles[12]
                         # ロボット制御
                         if mode == 1 and self.robot_connected:
                             action = {

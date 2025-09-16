@@ -10,13 +10,10 @@ from lerobot.motors.dynamixel import (
     DynamixelMotorsBus,
     OperatingMode,
 )
-from lerobot.motors.robstride import RobStride
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
 from .config_my_aloha import MyAlohaConfig
-
-logger = logging.getLogger(__name__)
-
+from .aloha_abc import AlohaArm, AlohaController
 
 class MyAloha(Robot):
     config_class = MyAlohaConfig
@@ -28,174 +25,61 @@ class MyAloha(Robot):
     ):
         super().__init__(config)
         self.config = config
-        self.dbus_r = DynamixelMotorsBus(
-            port=self.config.u2d2_port1,
-            motors={
-                "waist_R": Motor(1, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "wrist_angle_R": Motor(7, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "wrist_rotate_R": Motor(8, "xm430-w350", MotorNormMode.RANGE_M100_100),
-                "gripper_R": Motor(9, "xm430-w350", MotorNormMode.RANGE_0_100),
-            },
-        )
-        self.dbus_l = DynamixelMotorsBus(
-            port=self.config.u2d2_port2,
-            motors={
-                "waist_L": Motor(1, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "wrist_angle_L": Motor(7, "xm540-w270", MotorNormMode.RANGE_M100_100),
-                "wrist_rotate_L": Motor(8, "xm430-w350", MotorNormMode.RANGE_M100_100),
-                "gripper_L": Motor(9, "xm430-w350", MotorNormMode.RANGE_0_100),
-            },
-        )
-        self.robstride = {
-            "shoulder_R": RobStride(port=self.config.can_port1, motor_id=1),
-            "elbow_R": RobStride(port=self.config.can_port1, motor_id=5),
-            "forearm_roll_R": RobStride(port=self.config.can_port1, motor_id=6),
-            "shoulder_L": RobStride(port=self.config.can_port2, motor_id=2),
-            "elbow_L": RobStride(port=self.config.can_port2, motor_id=5),
-            "forearm_roll_L": RobStride(port=self.config.can_port2, motor_id=6),
-        }
-        # self.cameras = make_cameras_from_configs(config.cameras)
-        self.is_connected = False
+        self.aloha = None
+        self.old_action_L = AlohaArm(0, 0, 0, 0, 0, 0, 0)
+        self.old_action_R = AlohaArm(0, 0, 0, 0, 0, 0, 0)
 
     def connect(self) -> None:
-        # Dynamixelバスを接続
-        self.dbus_r.connect()
-        self.dbus_l.connect()
-        
-        # RobStrideモーターを接続・有効化
-        for motor_name, motor in self.robstride.items():
-            try:
-                if motor.connect():
-                    motor.enable()
-                    logger.info(f"RobStrideモーター {motor_name} 接続・有効化完了")
-                else:
-                    logger.error(f"RobStrideモーター {motor_name} の接続に失敗")
-            except Exception as e:
-                logger.error(f"RobStrideモーター {motor_name} の接続エラー: {e}")
-        
-        self.configure()
-        self.is_connected = True
-
-    def configure(self) -> None:
-        with self.dbus_r.torque_disabled(), self.dbus_l.torque_disabled():
-            # Dynamixel右腕
-            self.dbus_r.configure_motors()
-            self.dbus_r.write("Velocity_Limit", 131)
-            for motor in self.dbus_r.motors:
-                if motor != "gripper_R":
-                    self.dbus_r.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
-            self.dbus_r.write("Operating_Mode", "gripper_R", OperatingMode.CURRENT_POSITION.value)
-            
-            # Dynamixel左腕
-            self.dbus_l.configure_motors()
-            self.dbus_l.write("Velocity_Limit", 131)
-            for motor in self.dbus_l.motors:
-                if motor != "gripper_L":
-                    self.dbus_l.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
-            self.dbus_l.write("Operating_Mode", "gripper_L", OperatingMode.CURRENT_POSITION.value)
-        
-        # RobStrideモーターをPP（Position Profile）モードに設定
-        for motor_name, motor in self.robstride.items():
-            try:
-                motor.set_mode_pp()
-                motor.set_pp_velocity(2.0)  # 2.0 rad/s の速度制限
-                motor.set_pp_acceleration(5.0)  # 5.0 rad/s^2 の加速度
-                logger.info(f"RobStrideモーター {motor_name} をPPモードに設定")
-            except Exception as e:
-                logger.warning(f"RobStrideモーター {motor_name} の設定エラー: {e}")
+        self.aloha = AlohaController(
+            self.config.right_robstride_port,
+            self.config.left_robstride_port,
+            self.config.right_dynamixel_port,
+            self.config.left_dynamixel_port,
+        )
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-        
-        # .posサフィックスを削除してアクションを正規化
-        normalized_action = {}
-        for key, value in action.items():
-            motor_name = key.replace(".pos", "") if key.endswith(".pos") else key
-            normalized_action[motor_name] = value
-        
-        # DynamixelとRobStrideモーターに分離
-        dynamixel_actions_r = {}
-        dynamixel_actions_l = {}
-        robstride_actions = {}
-        
-        for motor_name, target_pos in normalized_action.items():
-            if motor_name in self.dbus_r.motors:
-                dynamixel_actions_r[motor_name] = target_pos
-            elif motor_name in self.dbus_l.motors:
-                dynamixel_actions_l[motor_name] = target_pos
-            elif motor_name in self.robstride:
-                robstride_actions[motor_name] = target_pos
-        
-        sent_actions = {}
-        
-        # Dynamixel右腕の制御
-        if dynamixel_actions_r:
-            if self.config.max_relative_target is not None:
-                present_pos_r = self.dbus_r.sync_read("Present_Position")
-                goal_present_pos_r = {key: (target_pos, present_pos_r[key]) 
-                                    for key, target_pos in dynamixel_actions_r.items()}
-                safe_goal_pos_r = ensure_safe_goal_position(goal_present_pos_r, self.config.max_relative_target)
-            else:
-                safe_goal_pos_r = dynamixel_actions_r
-            
-            self.dbus_r.sync_write("Goal_Position", safe_goal_pos_r)
-            sent_actions.update(safe_goal_pos_r)
-        
-        # Dynamixel左腕の制御
-        if dynamixel_actions_l:
-            if self.config.max_relative_target is not None:
-                present_pos_l = self.dbus_l.sync_read("Present_Position")
-                goal_present_pos_l = {key: (target_pos, present_pos_l[key]) 
-                                    for key, target_pos in dynamixel_actions_l.items()}
-                safe_goal_pos_l = ensure_safe_goal_position(goal_present_pos_l, self.config.max_relative_target)
-            else:
-                safe_goal_pos_l = dynamixel_actions_l
-            
-            self.dbus_l.sync_write("Goal_Position", safe_goal_pos_l)
-            sent_actions.update(safe_goal_pos_l)
-        
-        # RobStrideモーターの制御
-        for motor_name, target_pos in robstride_actions.items():
-            try:
-                motor = self.robstride[motor_name]
-                motor.set_target_position(target_pos)
-                sent_actions[motor_name] = target_pos
-            except Exception as e:
-                logger.warning(f"RobStrideモーター {motor_name} の制御に失敗: {e}")
-        
-        return sent_actions
+        action_L = AlohaArm(
+            joint0=action.get("joint_L_0", self.old_action_L.joint0),
+            joint1=action.get("joint_L_1", self.old_action_L.joint1),
+            joint2=action.get("joint_L_2", self.old_action_L.joint2),
+            joint3=action.get("joint_L_3", self.old_action_L.joint3),
+            joint4=action.get("joint_L_4", self.old_action_L.joint4),
+            joint5=action.get("joint_L_5", self.old_action_L.joint5),
+            gripper=action.get("gripper_L", self.old_action_L.gripper),
+        )
+        action_R = AlohaArm(
+            joint0=action.get("joint_R_0", self.old_action_R.joint0),
+            joint1=action.get("joint_R_1", self.old_action_R.joint1),
+            joint2=action.get("joint_R_2", self.old_action_R.joint2),
+            joint3=action.get("joint_R_3", self.old_action_R.joint3),
+            joint4=action.get("joint_R_4", self.old_action_R.joint4),
+            joint5=action.get("joint_R_5", self.old_action_R.joint5),
+            gripper=action.get("gripper_R", self.old_action_R.gripper),
+        )
+        action_L = self.apply_max_relative_target(action_L, self.old_action_L)
+        action_R = self.apply_max_relative_target(action_R, self.old_action_R)
+        self.aloha.update_pos(action_R, action_L)
+        self.old_action_L = action_L
+        self.old_action_R = action_R
+        return action
+
+    def apply_max_relative_target(self, current: AlohaArm, old: AlohaArm) -> AlohaArm:
+        def limit_change(new, old):
+            delta = new - old
+            if abs(delta) > self.config.max_relative_target:
+                delta = self.config.max_relative_target * (1 if delta > 0 else -1)
+            return old + delta
+        return AlohaArm(
+            joint0=limit_change(current.joint0, old.joint0),
+            joint1=limit_change(current.joint1, old.joint1),
+            joint2=limit_change(current.joint2, old.joint2),
+            joint3=limit_change(current.joint3, old.joint3),
+            joint4=limit_change(current.joint4, old.joint4),
+            joint5=limit_change(current.joint5, old.joint5),
+            gripper=current.gripper,
+        )
 
     def disconnect(self):
-        """全てのモーターとの接続を安全に切断します"""
-        if not self.is_connected:
-            return
-        
-        try:
-            # RobStrideモーターを停止・切断
-            for motor_name, motor in self.robstride.items():
-                try:
-                    # 目標位置を現在位置に設定して停止
-                    motor.set_target_position(0.0)
-                    motor.disable()
-                    motor.disconnect()
-                    logger.info(f"RobStrideモーター {motor_name} を切断しました")
-                except Exception as e:
-                    logger.warning(f"RobStrideモーター {motor_name} の切断に失敗: {e}")
-            
-            # Dynamixelバスを切断
-            try:
-                self.dbus_r.disconnect()
-                logger.info("Dynamixel右腕バスを切断しました")
-            except Exception as e:
-                logger.warning(f"Dynamixel右腕バスの切断に失敗: {e}")
-            
-            try:
-                self.dbus_l.disconnect()
-                logger.info("Dynamixel左腕バスを切断しました")
-            except Exception as e:
-                logger.warning(f"Dynamixel左腕バスの切断に失敗: {e}")
-        
-        finally:
-            self.is_connected = False
-            logger.info("MyAlohaロボットとの接続を切断しました")
+        if self.aloha is not None:
+            self.aloha.disable()
+            self.aloha = None

@@ -5,9 +5,8 @@ from ..config import RobotConfig
 @RobotConfig.register_subclass("my_aloha")
 @dataclass
 class MyAlohaConfig(RobotConfig):
-    u2d2_port1: str
-    u2d2_port2: str
-    can_port1: str
-    can_port2: str
-    max_relative_target: float | dict[str, float] = 5.0
-    # cameras: dict[str, CameraConfig] = field(default_factory=dict)
+    right_robstride_port: str
+    left_robstride_port: str
+    right_dynamixel_port: str
+    left_dynamixel_port: str
+    max_relative_target: float = 0.1 # radians
