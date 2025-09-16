@@ -1,43 +1,47 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Unity Communicator用のMyAlohaロボット制御通信ノード
-WebSocket接続、UDP関節角度受信、MyAlohaロボット制御を統合
-"""
-
 import asyncio
 import websockets
 import socket
 import json
 import struct
-import time
 import threading
 from typing import Optional
-
 from lerobot.robots.my_aloha import MyAloha, MyAlohaConfig
 
 class RobotCommunicationNode:
     def __init__(self):
-        # 通信設定
         self.websocket_port = 8080
         self.unity_joint_port: Optional[int] = None
-        # 通信状態
         self.is_connected = False
         self.is_receiving_joints = False
-        # スレッド制御
         self.joint_thread: Optional[threading.Thread] = None
         self.stop_threads = False
-        # MyAlohaロボット設定
         self.robot: Optional[MyAloha] = None
         self.robot_connected = False
 
     def initialize_robot(self):
         """MyAlohaロボットの初期化"""
         try:
-            config = MyAlohaConfig(port="/dev/ttyUSB0")  # 適切なポートに変更
+            config = MyAlohaConfig(
+                u2d2_port1="/dev/ttyUSB0",
+                u2d2_port2="/dev/ttyUSB1",
+                can_port1="/dev/ttyACM0",
+                can_port2="/dev/ttyACM1",
+                max_relative_target=5.0,
+                # cameras={}
+            )
             self.robot = MyAloha(config)
             self.robot.connect()
             self.robot_connected = True
+            if self.robot_connected:
+                home_action = {
+                    "joint_L_0": 0.0, "joint_L_1": 0.0, "joint_L_2": 0.0,
+                    "joint_L_3": 0.0, "joint_L_4": 0.0, "joint_L_5": 0.0, "gripper_L": 0.0,
+                    "joint_R_0": 0.0, "joint_R_1": 0.0, "joint_R_2": 0.0,
+                    "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
+                }
+                self.robot.send_action(home_action)
             print("MyAlohaロボット初期化・接続完了")
         except Exception as e:
             print(f"ロボット初期化エラー: {e}")
@@ -46,12 +50,10 @@ class RobotCommunicationNode:
     async def websocket_handler(self, websocket):
         """WebSocket接続ハンドラー"""
         print(f"WebSocket接続: {websocket.remote_address}")
-        
         # 新しい接続でロボットが切断されている場合は再接続を試みる
         if not self.robot_connected:
             print("ロボット再接続を試行中...")
             self.initialize_robot()
-        
         try:
             print("Unity側からのメッセージを待機中...")
             message = await websocket.recv()
@@ -102,17 +104,14 @@ class RobotCommunicationNode:
         """リセット要求処理"""
         try:
             print("ロボットリセット処理開始...")
-            
-            # ロボットをホームポジションに移動
             if self.robot_connected:
                 home_action = {
-                    "waist_L.pos": 0.0, "shoulder_L.pos": 0.0, "elbow_shadow_L.pos": 0.0,
-                    "forearm_roll_L.pos": 0.0, "wrist_angle_L.pos": 0.0, "wrist_rotate_L.pos": 0.0, "gripper_L.pos": 0.0,
-                    "waist_R.pos": 0.0, "shoulder_R.pos": 0.0, "elbow_shadow_R.pos": 0.0,
-                    "forearm_roll_R.pos": 0.0, "wrist_angle_R.pos": 0.0, "wrist_rotate_R.pos": 0.0, "gripper_R.pos": 0.0,
+                    "joint_L_0": 0.0, "joint_L_1": 0.0, "joint_L_2": 0.0,
+                    "joint_L_3": 0.0, "joint_L_4": 0.0, "joint_L_5": 0.0, "gripper_L": 0.0,
+                    "joint_R_0": 0.0, "joint_R_1": 0.0, "joint_R_2": 0.0,
+                    "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
                 }
                 self.robot.send_action(home_action)
-            
             await asyncio.sleep(2.0)
             print("ロボットリセット処理完了")
             response = {"status": "reset_complete", "message": "ロボットリセットが完了しました"}
@@ -139,7 +138,6 @@ class RobotCommunicationNode:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('0.0.0.0', self.unity_joint_port))
         sock.settimeout(1.0)
-        
         try:
             while self.is_receiving_joints and not self.stop_threads:
                 try:
@@ -152,33 +150,27 @@ class RobotCommunicationNode:
                             angle = struct.unpack('<f', data[offset:offset+4])[0]
                             joint_angles.append(angle)
                         
-                        # デバッグ出力
-                        if int(time.time() * 2) % 2 == 0:
-                            print(f"受信: モード={mode}, 右腕: {[f'{a:.1f}' for a in joint_angles[7:13]]}")
-                        
                         # ロボット制御
                         if mode == 1 and self.robot_connected:
                             action = {
                                 # 左腕
-                                "waist_L.pos": joint_angles[0],
-                                "shoulder_L.pos": joint_angles[1], 
-                                "elbow_shadow_L.pos": joint_angles[2],
-                                "forearm_roll_L.pos": joint_angles[3],
-                                "wrist_angle_L.pos": joint_angles[4],
-                                "wrist_rotate_L.pos": joint_angles[5],
-                                "gripper_L.pos": joint_angles[6],
+                                "joint_L_0": joint_angles[0],
+                                "joint_L_1": joint_angles[1], 
+                                "joint_L_2": joint_angles[2],
+                                "joint_L_3": joint_angles[3],
+                                "joint_L_4": joint_angles[4],
+                                "joint_L_5": joint_angles[5],
+                                "gripper_L": joint_angles[6],
                                 # 右腕
-                                "waist_R.pos": joint_angles[7],
-                                "shoulder_R.pos": joint_angles[8],
-                                "elbow_shadow_R.pos": joint_angles[9], 
-                                "forearm_roll_R.pos": joint_angles[10],
-                                "wrist_angle_R.pos": joint_angles[11],
-                                "wrist_rotate_R.pos": joint_angles[12],
-                                "gripper_R.pos": joint_angles[13],
+                                "joint_R_0": joint_angles[7],
+                                "joint_R_1": joint_angles[8],
+                                "joint_R_2": joint_angles[9], 
+                                "joint_R_3": joint_angles[10],
+                                "joint_R_4": joint_angles[11],
+                                "joint_R_5": joint_angles[12],
+                                "gripper_R": joint_angles[13],
                             }
-                            
                             self.robot.send_action(action)
-                            
                 except socket.timeout:
                     continue
                 except Exception as e:
@@ -194,18 +186,14 @@ class RobotCommunicationNode:
         self.is_connected = False
         self.is_receiving_joints = False
         self.stop_threads = True
-        
         if self.joint_thread and self.joint_thread.is_alive():
             self.joint_thread.join(timeout=2)
         self.joint_thread = None
-        
         print("WebSocket接続クリーンアップ完了")
 
     def cleanup(self):
         """完全なリソースクリーンアップ"""
         self.cleanup_connection()
-        
-        # ロボット切断処理
         if self.robot_connected and self.robot:
             try:
                 self.robot.disconnect()
@@ -213,24 +201,16 @@ class RobotCommunicationNode:
                 self.robot_connected = False
             except Exception as e:
                 print(f"ロボット切断エラー: {e}")
-        
         print("完全クリーンアップ完了")
 
     async def start_server(self):
         """WebSocketサーバーを開始"""
         print(f"WebSocketサーバーを開始: ポート{self.websocket_port}")
-        
-        # ロボット初期化
         self.initialize_robot()
-        
         try:
-            async with websockets.serve(
-                self.websocket_handler,
-                "0.0.0.0",
-                self.websocket_port
-            ):
+            async with websockets.serve(self.websocket_handler, "0.0.0.0", self.websocket_port):
                 print("サーバー起動完了。Unityからの接続を待機中...")
-                await asyncio.Future()  # 永続的に実行
+                await asyncio.Future()
         except KeyboardInterrupt:
             print("\nサーバー停止中...")
         except Exception as e:
