@@ -1,19 +1,7 @@
-import logging
-import time
-from functools import cached_property
-from typing import Any
-from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.constants import OBS_STATE
-from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
-from lerobot.motors import Motor, MotorCalibration, MotorNormMode
-from lerobot.motors.dynamixel import (
-    DynamixelMotorsBus,
-    OperatingMode,
-)
 from ..robot import Robot
-from ..utils import ensure_safe_goal_position
 from .config_my_aloha import MyAlohaConfig
 from .aloha_abc import AlohaArm, AlohaController
+# from kvt_aloha import AlohaController AlohaArm
 
 class MyAloha(Robot):
     config_class = MyAlohaConfig
