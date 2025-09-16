@@ -231,3 +231,5 @@ if __name__ == "__main__":
     node = RobotCommunicationNode()
     print("Unity-MyAloha通信サーバーを起動します...")
     asyncio.run(node.start_server())
+
+# uv run src\lerobot\my_aloha_server.py
