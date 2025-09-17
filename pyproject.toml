@@ -83,6 +83,7 @@ dependencies = [
     "termcolor>=2.4.0,<4.0.0",
     "websockets>=15.0.1",
     "matplotlib>=3.10.6",
+    "dynamixel_sdk @ git+https://github.com/ROBOTIS-GIT/DynamixelSDK.git#subdirectory=python",
 ]
 
 # Optional dependencies

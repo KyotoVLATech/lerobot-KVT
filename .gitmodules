@@ -1,0 +1,3 @@
+[submodule "kvt_aloha_python_controller"]
+	path = kvt_aloha_python_controller
+	url = https://github.com/KyotoVLATech/kvt_aloha_python_controller.git
