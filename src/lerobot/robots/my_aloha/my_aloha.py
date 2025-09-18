@@ -92,18 +92,18 @@ class MyAloha():
         連続的な角度(current)と古い角度(old)の差分を計算し、最大変化量で制限します。
         この関数は、入力角度が既にアンラップされていることを前提とします。
         """
-        def _limit(new, old):
+        def _limit(new, old, delta_max):
             delta = new - old
-            if abs(delta) > self.config.max_relative_target:
-                delta = self.config.max_relative_target * np.sign(delta)
+            if abs(delta) > delta_max:
+                delta = delta_max * np.sign(delta)
             return old + delta
         return AlohaArm(
-            motor1=_limit(current.motor1, old.motor1),
-            motor2=_limit(current.motor2, old.motor2),
-            motor3=_limit(current.motor3, old.motor3),
-            motor4=_limit(current.motor4, old.motor4),
-            motor5=_limit(current.motor5, old.motor5),
-            motor6=_limit(current.motor6, old.motor6),
+            motor1=_limit(current.motor1, old.motor1, self.config.max_relative_target_1),
+            motor2=_limit(current.motor2, old.motor2, self.config.max_relative_target_2),
+            motor3=_limit(current.motor3, old.motor3, self.config.max_relative_target_3),
+            motor4=_limit(current.motor4, old.motor4, self.config.max_relative_target_4),
+            motor5=_limit(current.motor5, old.motor5, self.config.max_relative_target_5),
+            motor6=_limit(current.motor6, old.motor6, self.config.max_relative_target_6),
             motor7=current.motor7,
         )
 
