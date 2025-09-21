@@ -128,10 +128,8 @@ class DummyCommunicationNode:
                             offset = 1 + i * 4
                             angle = struct.unpack('<f', data[offset:offset+4])[0]
                             joint_angles.append(angle)
-                        joint_angles[7] -= np.pi / 2
-                        joint_angles[7] = limit_change(joint_angles[7], self.old)
-                        self.old = joint_angles[7]
-                        print(f"R joint 1: {joint_angles[7] * 180.0 / np.pi}")
+                        joint_angles[9] = -joint_angles[9] - np.pi / 2
+                        print(f"R joint 1: {joint_angles[9] * 180.0 / np.pi}")
 
                 except socket.timeout:
                     continue

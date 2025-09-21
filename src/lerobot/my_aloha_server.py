@@ -9,7 +9,6 @@ import threading
 import numpy as np
 from typing import Optional
 import time
-import queue
 from lerobot.robots.my_aloha import MyAloha, MyAlohaConfig
 
 class RobotCommunicationNode:
@@ -36,17 +35,17 @@ class RobotCommunicationNode:
         try:
             config = MyAlohaConfig(
                 right_dynamixel_port="COM6",
-                right_robstride_port="COM10",
+                right_robstride_port="COM15",
                 left_dynamixel_port="COM5",
-                left_robstride_port="COM11",
-                max_relative_target_1=0.01, # yaw
-                max_relative_target_2=0.01, # pitch
-                max_relative_target_3=0.01, # pitch
-                max_relative_target_4=0.03, # yaw
-                max_relative_target_5=0.01, # pitch
-                max_relative_target_6=0.03, # yaw
+                left_robstride_port="COM18",
+                max_relative_target_1=0.05, # yaw
+                max_relative_target_2=0.03, # pitch
+                max_relative_target_3=0.03, # pitch
+                max_relative_target_4=0.05, # yaw
+                max_relative_target_5=0.03, # pitch
+                max_relative_target_6=0.05, # yaw
                 current_limit_gripper_R=0.2,
-                current_limit_gripper_L=0.5,
+                current_limit_gripper_L=0.2,
             )
             self.robot = MyAloha(config)
             self.robot.connect()
@@ -191,6 +190,9 @@ class RobotCommunicationNode:
 
     def robot_control_worker(self):
         print("ロボット制御ワーカー開始")
+        # 初回アクション受信時刻を記録する変数（ワーカー再起動時にリセット）
+        first_action_time = None
+        
         while self.robot_connected and not self.stop_threads and not self.stop_event.is_set():
             start_time = time.perf_counter()
             with self.action_lock:
@@ -199,9 +201,18 @@ class RobotCommunicationNode:
                 time.sleep(0.1)
                 continue
             if last_action is not None:
+                # 初回アクション受信時刻を記録
+                if first_action_time is None:
+                    first_action_time = time.time()
+                    print("初回アクション受信を記録しました。3秒後にuse_relativeがFalseになります。")
+                
+                # 初回アクション受信から3秒経過したかチェック
+                elapsed_since_first_action = time.time() - first_action_time
+                use_relative = elapsed_since_first_action < 3.0
+                
                 with self.robot_lock:
                     if not self.reset_in_progress.is_set() and self.robot_connected:
-                        self.robot.send_action(last_action)
+                        self.robot.send_action(last_action, use_relative=use_relative)
             elapsed_time = time.perf_counter() - start_time
             sleep_duration = 1.0 / self.control_frequency - elapsed_time
             if sleep_duration > 0:
