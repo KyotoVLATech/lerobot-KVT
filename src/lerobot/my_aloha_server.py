@@ -35,9 +35,9 @@ class RobotCommunicationNode:
         try:
             config = MyAlohaConfig(
                 right_dynamixel_port="COM6",
-                right_robstride_port="COM15",
+                right_robstride_port="COM17",
                 left_dynamixel_port="COM5",
-                left_robstride_port="COM18",
+                left_robstride_port="COM19",
                 max_relative_target_1=0.05, # yaw
                 max_relative_target_2=0.03, # pitch
                 max_relative_target_3=0.03, # pitch
