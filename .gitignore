@@ -19,7 +19,6 @@ env/
 venv/
 env.bak/
 venv.bak/
-.python-version
 __pypackages__/
 node_modules/
 

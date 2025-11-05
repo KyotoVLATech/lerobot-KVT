@@ -30,28 +30,28 @@ class RobotCommunicationNode:
         self.reset_in_progress = threading.Event()  # リセット処理中フラグ
         self.latest_action = None
         self.action_lock = threading.Lock()
-        self.control_frequency = 100 # Hz
+        self.control_frequency = 90 # Hz
 
-    def initialize_robot(self):
+    async def initialize_robot(self):
         try:
             config = MyAlohaConfig(
-                right_dynamixel_port="COM6",
-                right_robstride_port="COM10",
-                left_dynamixel_port="COM5",
-                left_robstride_port="COM11",
-                max_relative_target_1=0.01, # yaw
+                right_dynamixel_port="/dev/ttyUSB1",
+                right_robstride_port="/dev/ttyUSB0",
+                left_dynamixel_port="/dev/ttyUSB3",
+                left_robstride_port="/dev/ttyUSB2",
+                max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
                 max_relative_target_3=0.01, # pitch
                 max_relative_target_4=0.03, # yaw
                 max_relative_target_5=0.01, # pitch
                 max_relative_target_6=0.03, # yaw
                 current_limit_gripper_R=0.2,
-                current_limit_gripper_L=0.5,
+                current_limit_gripper_L=0.2,
             )
             self.robot = MyAloha(config)
-            self.robot.connect()
+            await self.robot.connect()
             self.robot_connected = True
-            time.sleep(2.0)
+            await asyncio.sleep(2.0)
             print("MyAlohaロボット初期化・接続完了")
         except Exception as e:
             print(f"ロボット初期化エラー: {e}")
@@ -62,7 +62,7 @@ class RobotCommunicationNode:
         # 新しい接続でロボットが切断されている場合は再接続を試みる
         if not self.robot_connected:
             print("ロボット再接続を試行中...")
-            self.initialize_robot()
+            await self.initialize_robot()
         try:
             print("Unity側からのメッセージを待機中...")
             message = await websocket.recv()
@@ -97,6 +97,12 @@ class RobotCommunicationNode:
                         await self.handle_reset_request(websocket)
                     elif command == 'save_data':
                         print("データ保存要求を受信しました")
+                    elif command == 'discard_data':
+                        print("データ破棄要求を受信しました")
+                    elif command == 'recording':
+                        print("recordingを受信しました")
+                    elif command == 'teleoperation':
+                        print("teleoperationを受信しました")
                     else:
                         print(f"不明なコマンド: {command}")
                 except json.JSONDecodeError:
@@ -133,7 +139,7 @@ class RobotCommunicationNode:
                         "joint_R_0": self.robot.old_action_R.motor1, "joint_R_1": self.robot.old_action_R.motor2, "joint_R_2": self.robot.old_action_R.motor3,
                         "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
                     }
-                    self.robot.send_action(home_action, use_relative=False)
+                    await self.robot.send_action(home_action, use_relative=False)
                     await asyncio.sleep(1.0)
                     home_action = {
                         "joint_L_0": 0.0, "joint_L_1": 0.0, "joint_L_2": 0.0,
@@ -141,7 +147,7 @@ class RobotCommunicationNode:
                         "joint_R_0": 0.0, "joint_R_1": 0.0, "joint_R_2": 0.0,
                         "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
                     }
-                    self.robot.send_action(home_action, use_relative=False)
+                    await self.robot.send_action(home_action, use_relative=False)
                     await asyncio.sleep(1.0)
                     print("ホームポジション移動完了")
                 finally:
@@ -191,6 +197,7 @@ class RobotCommunicationNode:
 
     def robot_control_worker(self):
         print("ロボット制御ワーカー開始")
+        first_action_time = None
         while self.robot_connected and not self.stop_threads and not self.stop_event.is_set():
             start_time = time.perf_counter()
             with self.action_lock:
@@ -199,9 +206,17 @@ class RobotCommunicationNode:
                 time.sleep(0.1)
                 continue
             if last_action is not None:
+                if first_action_time is None:
+                    first_action_time = time.time()
+                    print("初回アクション受信を記録しました。3秒後にuse_relativeがFalseになります。")
+                
+                # 初回アクション受信から3秒経過したかチェック
+                elapsed_since_first_action = time.time() - first_action_time
+                use_relative = elapsed_since_first_action < 3.0
                 with self.robot_lock:
                     if not self.reset_in_progress.is_set() and self.robot_connected:
-                        self.robot.send_action(last_action)
+                        # 非同期関数を同期的に実行
+                        asyncio.run(self.robot.send_action(last_action, use_relative=use_relative))
             elapsed_time = time.perf_counter() - start_time
             sleep_duration = 1.0 / self.control_frequency - elapsed_time
             if sleep_duration > 0:
@@ -299,7 +314,7 @@ class RobotCommunicationNode:
                     "joint_R_0": self.robot.old_action_R.motor1, "joint_R_1": self.robot.old_action_R.motor2, "joint_R_2": self.robot.old_action_R.motor3,
                     "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
                 }
-                self.robot.send_action(home_action, use_relative=False)
+                asyncio.run(self.robot.send_action(home_action, use_relative=False))
                 time.sleep(1.0)
                 home_action = {
                     "joint_L_0": 0.0, "joint_L_1": 0.0, "joint_L_2": 0.0,
@@ -307,7 +322,7 @@ class RobotCommunicationNode:
                     "joint_R_0": 0.0, "joint_R_1": 0.0, "joint_R_2": 0.0,
                     "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
                 }
-                self.robot.send_action(home_action, use_relative=False)
+                asyncio.run(self.robot.send_action(home_action, use_relative=False))
                 time.sleep(1.0)
                 print("ロボット初期位置復帰完了")
             except Exception as e:
@@ -318,7 +333,7 @@ class RobotCommunicationNode:
         self.cleanup_connection()
         if self.robot_connected and self.robot:
             try:
-                self.robot.disconnect()
+                asyncio.run(self.robot.disconnect())
                 print("ロボット接続切断")
                 self.robot_connected = False
             except Exception as e:
@@ -327,7 +342,7 @@ class RobotCommunicationNode:
 
     async def start_server(self):
         print(f"WebSocketサーバーを開始: ポート{self.websocket_port}")
-        self.initialize_robot()
+        await self.initialize_robot()
         try:
             async with websockets.serve(self.websocket_handler, "0.0.0.0", self.websocket_port):
                 print("サーバー起動完了。Unityからの接続を待機中...")
@@ -344,4 +359,4 @@ if __name__ == "__main__":
     print("Unity-MyAloha通信サーバーを起動します...")
     asyncio.run(node.start_server())
 
-# uv run src\lerobot\my_aloha_server.py
+# uv run src/lerobot/my_aloha_server.py
