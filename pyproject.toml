@@ -85,6 +85,7 @@ dependencies = [
     "matplotlib>=3.10.6",
     "dynamixel_sdk @ git+https://github.com/ROBOTIS-GIT/DynamixelSDK.git#subdirectory=python",
     "pyserial-asyncio>=0.6",
+    "pyqt5>=5.15.11",
 ]
 
 # Optional dependencies

@@ -10,6 +10,8 @@ import numpy as np
 from typing import Optional
 import time
 import queue
+import csv
+from datetime import datetime
 from lerobot.robots.my_aloha import MyAloha, MyAlohaConfig
 
 class RobotCommunicationNode:
@@ -23,22 +25,26 @@ class RobotCommunicationNode:
         self.robot: Optional[MyAloha] = None
         self.robot_connected = False
         # 非同期ロボット制御用
-        self.robot_control_thread: Optional[threading.Thread] = None
-        # スレッド同期と排他制御用（デバッグ版）
-        self.stop_event = threading.Event()  # スレッド停止用Event
-        self.robot_lock = threading.Lock()  # ロボット制御排他用Lock
-        self.reset_in_progress = threading.Event()  # リセット処理中フラグ
+        self.robot_control_task: Optional[asyncio.Task] = None
+        # 非同期同期プリミティブ
+        self.stop_event = asyncio.Event()  # タスク停止用Event
+        self.robot_lock = asyncio.Lock()  # ロボット制御排他用Lock
+        self.reset_in_progress = asyncio.Event()  # リセット処理中フラグ
+        # UDP受信スレッドとの通信用（スレッドセーフ）
         self.latest_action = None
-        self.action_lock = threading.Lock()
-        self.control_frequency = 90 # Hz
+        self.action_lock = threading.Lock()  # UDP受信スレッド用
+        self.control_frequency = 60 # Hz
+        # アクション記録用
+        self.action_history = []  # actionと時刻を記録するリスト
+        self.history_lock = threading.Lock()  # action_history用のロック
 
     async def initialize_robot(self):
         try:
             config = MyAlohaConfig(
                 right_dynamixel_port="/dev/ttyUSB1",
                 right_robstride_port="/dev/ttyUSB0",
-                left_dynamixel_port="/dev/ttyUSB3",
                 left_robstride_port="/dev/ttyUSB2",
+                left_dynamixel_port="/dev/ttyUSB3",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
                 max_relative_target_3=0.01, # pitch
@@ -83,7 +89,7 @@ class RobotCommunicationNode:
             traceback.print_exc()
         finally:
             print("WebSocket接続終了")
-            self.cleanup_connection()
+            await self.cleanup_connection()
 
     async def handle_websocket_messages(self, websocket):
         try:
@@ -123,16 +129,18 @@ class RobotCommunicationNode:
                 return
             # リセット処理中フラグを設定
             self.reset_in_progress.set()
-            with self.robot_lock:  # ロボット制御を排他制御
+            async with self.robot_lock:  # ロボット制御を排他制御
                 try:
-                    print("制御スレッド停止シグナル送信中...")
+                    print("制御タスク停止シグナル送信中...")
                     self.stop_event.set()
                     self.stop_threads = True
-                    if self.robot_control_thread and self.robot_control_thread.is_alive():
-                        print("ロボット制御スレッドの停止を待機中...")
-                        self.robot_control_thread.join(timeout=2.0)
-                        if self.robot_control_thread.is_alive():
-                            print("警告: ロボット制御スレッドが停止できませんでした")
+                    if self.robot_control_task and not self.robot_control_task.done():
+                        print("ロボット制御タスクの停止を待機中...")
+                        try:
+                            await asyncio.wait_for(self.robot_control_task, timeout=2.0)
+                        except asyncio.TimeoutError:
+                            print("警告: ロボット制御タスクが停止できませんでした")
+                            self.robot_control_task.cancel()
                     home_action = {
                         "joint_L_0": self.robot.old_action_L.motor1, "joint_L_1": self.robot.old_action_L.motor2, "joint_L_2": self.robot.old_action_L.motor3,
                         "joint_L_3": 0.0, "joint_L_4": 0.0, "joint_L_5": 0.0, "gripper_L": 0.0,
@@ -156,13 +164,13 @@ class RobotCommunicationNode:
                     self.stop_event.clear()
                     self.stop_threads = False
                     if self.is_receiving_joints:
-                        print("UDP受信スレッドとロボット制御スレッドを再開中...")
+                        print("UDP受信スレッドとロボット制御タスクを再開中...")
                         if not self.joint_thread or not self.joint_thread.is_alive():
                             print("UDP受信スレッドを再起動中...")
                             self.joint_thread = threading.Thread(target=self.joint_receiver_thread)
                             self.joint_thread.daemon = True
                             self.joint_thread.start()
-                        self.start_robot_control_thread()
+                        await self.start_robot_control_task()
                     self.reset_in_progress.clear()
             print("ロボットリセット処理完了")
             response = {"status": "reset_complete", "message": "ロボットリセットが完了しました"}
@@ -182,46 +190,50 @@ class RobotCommunicationNode:
             self.joint_thread = threading.Thread(target=self.joint_receiver_thread)
             self.joint_thread.daemon = True
             self.joint_thread.start()
-            self.start_robot_control_thread()
-            print("UDP通信スレッドと非同期ロボット制御スレッドを開始しました")
+            # 非同期タスクを開始するためのヘルパー
+            asyncio.create_task(self.start_robot_control_task())
+            print("UDP通信スレッドと非同期ロボット制御タスクを開始しました")
 
-    def start_robot_control_thread(self):
+    async def start_robot_control_task(self):
         if self.robot_connected:
-            if self.robot_control_thread and self.robot_control_thread.is_alive():
-                print("ロボット制御スレッドは既に動作中です")
+            if self.robot_control_task and not self.robot_control_task.done():
+                print("ロボット制御タスクは既に動作中です")
                 return
-            self.robot_control_thread = threading.Thread(target=self.robot_control_worker)
-            self.robot_control_thread.daemon = True
-            self.robot_control_thread.start()
-            print("新しいロボット制御スレッドを開始しました")
+            self.robot_control_task = asyncio.create_task(self.robot_control_worker())
+            print("新しいロボット制御タスクを開始しました")
 
-    def robot_control_worker(self):
+    async def robot_control_worker(self):
         print("ロボット制御ワーカー開始")
-        first_action_time = None
-        while self.robot_connected and not self.stop_threads and not self.stop_event.is_set():
-            start_time = time.perf_counter()
-            with self.action_lock:
-                last_action = self.latest_action
-            if self.reset_in_progress.is_set():
-                time.sleep(0.1)
-                continue
-            if last_action is not None:
-                if first_action_time is None:
-                    first_action_time = time.time()
-                    print("初回アクション受信を記録しました。3秒後にuse_relativeがFalseになります。")
-                
-                # 初回アクション受信から3秒経過したかチェック
-                elapsed_since_first_action = time.time() - first_action_time
-                use_relative = elapsed_since_first_action < 3.0
-                with self.robot_lock:
-                    if not self.reset_in_progress.is_set() and self.robot_connected:
-                        # 非同期関数を同期的に実行
-                        asyncio.run(self.robot.send_action(last_action, use_relative=use_relative))
-            elapsed_time = time.perf_counter() - start_time
-            sleep_duration = 1.0 / self.control_frequency - elapsed_time
-            if sleep_duration > 0:
-                time.sleep(sleep_duration)
-        print("ロボット制御ワーカー終了")
+        try:
+            first_action_time = None
+            while self.robot_connected and not self.stop_threads and not self.stop_event.is_set():
+                start_time = time.perf_counter()
+                with self.action_lock:
+                    last_action = self.latest_action
+                if self.reset_in_progress.is_set():
+                    await asyncio.sleep(0.1)
+                    continue
+                if last_action is not None:
+                    if first_action_time is None:
+                        first_action_time = time.time()
+                        print("初回アクション受信を記録しました。3秒後にuse_relativeがFalseになります。")
+                    
+                    # 初回アクション受信から3秒経過したかチェック
+                    elapsed_since_first_action = time.time() - first_action_time
+                    use_relative = elapsed_since_first_action < 3.0
+                    async with self.robot_lock:
+                        if not self.reset_in_progress.is_set() and self.robot_connected:
+                            await self.robot.send_action(last_action, use_relative=use_relative)
+                elapsed_time = time.perf_counter() - start_time
+                # print(f"ロボット制御ワーカー周期処理時間: {elapsed_time:.4f}秒")
+                sleep_duration = 1.0 / self.control_frequency - elapsed_time
+                if sleep_duration > 0:
+                    # print(f"ロボット制御ワーカー待機: {sleep_duration:.4f}秒")
+                    await asyncio.sleep(sleep_duration)
+        except asyncio.CancelledError:
+            print("ロボット制御ワーカーがキャンセルされました")
+        finally:
+            print("ロボット制御ワーカー終了")
 
     def joint_receiver_thread(self):
         print(f"関節角度受信開始: ポート{self.unity_joint_port}")
@@ -257,24 +269,31 @@ class RobotCommunicationNode:
                         if mode == 1 and self.robot_connected:
                             action = {
                                 # 左腕
-                                "joint_L_0": joint_angles[0], # ok
+                                "joint_L_0": 0.0, # joint_angles[0], # ok
                                 "joint_L_1": joint_angles[1], # ok
                                 "joint_L_2": joint_angles[2], # ok
-                                "joint_L_3": joint_angles[3], # ok
-                                "joint_L_4": joint_angles[4], # ok
-                                "joint_L_5": joint_angles[5], # ok
-                                "gripper_L": joint_angles[6], # ok
+                                "joint_L_3": 0.0, # joint_angles[3], # ok
+                                "joint_L_4": 0.0, # joint_angles[4], # ok
+                                "joint_L_5": 0.0, # joint_angles[5], # ok
+                                "gripper_L": 0.0, # joint_angles[6], # ok
                                 # 右腕
-                                "joint_R_0": joint_angles[7], # ok
+                                "joint_R_0": 0.0, # joint_angles[7], # ok
                                 "joint_R_1": joint_angles[8], # ok
                                 "joint_R_2": joint_angles[9], # ok
-                                "joint_R_3": joint_angles[10], # ok
-                                "joint_R_4": joint_angles[11], # ok
-                                "joint_R_5": joint_angles[12], # ok
-                                "gripper_R": joint_angles[13], # ok
+                                "joint_R_3": 0.0, # joint_angles[10], # ok
+                                "joint_R_4": 0.0, # joint_angles[11], # ok
+                                "joint_R_5": 0.0, # joint_angles[12], # ok
+                                "gripper_R": 0.0, # joint_angles[13], # ok
                             }
                             with self.action_lock:
                                 self.latest_action = action
+                            # actionと時刻を記録
+                            timestamp = time.time()
+                            with self.history_lock:
+                                self.action_history.append({
+                                    'timestamp': timestamp,
+                                    'action': action.copy()
+                                })
                             # self.send_robot_command_async(action)
                 except socket.timeout:
                     continue
@@ -286,24 +305,33 @@ class RobotCommunicationNode:
             sock.close()
             print("関節角度受信終了")
 
-    def cleanup_connection(self):
+    async def cleanup_connection(self):
         print("WebSocket接続クリーンアップ開始...")
         # 接続状態フラグを更新
         self.is_connected = False
         self.is_receiving_joints = False
         self.stop_threads = True
+        self.stop_event.set()
+        
+        # ロボット制御タスクの終了
+        if self.robot_control_task and not self.robot_control_task.done():
+            print("ロボット制御タスクを終了中...")
+            self.robot_control_task.cancel()
+            try:
+                await asyncio.wait_for(self.robot_control_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        self.robot_control_task = None
+        
         # UDP受信スレッドの終了
         if self.joint_thread and self.joint_thread.is_alive():
             print("UDP受信スレッドを終了中...")
             self.joint_thread.join(timeout=2)
         self.joint_thread = None
-        # ロボット制御スレッドの終了
-        if self.robot_control_thread and self.robot_control_thread.is_alive():
-            print("ロボット制御スレッドを終了中...")
-            self.robot_control_thread.join(timeout=2)
-        self.robot_control_thread = None
+        
         with self.action_lock:
             self.latest_action = None
+        
         # WebSocket切断時にロボットを初期位置に戻す
         if self.robot_connected and self.robot:
             try:
@@ -314,31 +342,63 @@ class RobotCommunicationNode:
                     "joint_R_0": self.robot.old_action_R.motor1, "joint_R_1": self.robot.old_action_R.motor2, "joint_R_2": self.robot.old_action_R.motor3,
                     "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
                 }
-                asyncio.run(self.robot.send_action(home_action, use_relative=False))
-                time.sleep(1.0)
+                await self.robot.send_action(home_action, use_relative=False)
+                await asyncio.sleep(1.0)
                 home_action = {
                     "joint_L_0": 0.0, "joint_L_1": 0.0, "joint_L_2": 0.0,
                     "joint_L_3": 0.0, "joint_L_4": 0.0, "joint_L_5": 0.0, "gripper_L": 0.0,
                     "joint_R_0": 0.0, "joint_R_1": 0.0, "joint_R_2": 0.0,
                     "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
                 }
-                asyncio.run(self.robot.send_action(home_action, use_relative=False))
-                time.sleep(1.0)
+                await self.robot.send_action(home_action, use_relative=False)
+                await asyncio.sleep(1.0)
                 print("ロボット初期位置復帰完了")
             except Exception as e:
                 print(f"初期位置復帰エラー: {e}")
         print("WebSocket接続クリーンアップ完了")
 
-    def cleanup(self):
-        self.cleanup_connection()
+    async def cleanup(self):
+        await self.cleanup_connection()
         if self.robot_connected and self.robot:
             try:
-                asyncio.run(self.robot.disconnect())
+                await self.robot.disconnect()
                 print("ロボット接続切断")
                 self.robot_connected = False
             except Exception as e:
                 print(f"ロボット切断エラー: {e}")
+        # アクション履歴をCSVに保存
+        self.save_action_history_to_csv()
         print("完全クリーンアップ完了")
+
+    def save_action_history_to_csv(self):
+        """アクション履歴をCSVファイルに保存"""
+        if not self.action_history:
+            print("保存するアクション履歴がありません")
+            return
+        
+        try:
+            # ファイル名にタイムスタンプを含める
+            filename = f"action_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            
+            with self.history_lock:
+                # CSVのヘッダーを作成（最初のアクションのキーを使用）
+                if self.action_history:
+                    fieldnames = ['timestamp'] + list(self.action_history[0]['action'].keys())
+                    
+                    with open(filename, 'w', newline='') as csvfile:
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                        
+                        for record in self.action_history:
+                            row = {'timestamp': record['timestamp']}
+                            row.update(record['action'])
+                            writer.writerow(row)
+                    
+                    print(f"アクション履歴を {filename} に保存しました（{len(self.action_history)}件）")
+        except Exception as e:
+            print(f"CSV保存エラー: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def start_server(self):
         print(f"WebSocketサーバーを開始: ポート{self.websocket_port}")
@@ -352,7 +412,7 @@ class RobotCommunicationNode:
         except Exception as e:
             print(f"サーバーエラー: {e}")
         finally:
-            self.cleanup()
+            await self.cleanup()
 
 if __name__ == "__main__":
     node = RobotCommunicationNode()
