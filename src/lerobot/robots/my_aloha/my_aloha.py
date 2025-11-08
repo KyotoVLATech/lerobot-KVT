@@ -31,8 +31,8 @@ class MyAloha():
         # AlohaControllerを非同期で初期化
         await self.aloha.__aenter__()
         # グリッパー電流を設定
-        await self.aloha.set_gripper_current("left", self.config.current_limit_gripper_R*1000)
-        await self.aloha.set_gripper_current("right", self.config.current_limit_gripper_L*1000)
+        await self.aloha.set_gripper_current("left", self.config.current_limit_gripper_L*1000)
+        await self.aloha.set_gripper_current("right", self.config.current_limit_gripper_R*1000)
 
     async def send_action(self, action: dict[str, float], use_relative=True) -> dict[str, float]:
         action_L = AlohaArm(

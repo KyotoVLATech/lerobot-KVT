@@ -34,9 +34,9 @@ class RobotCommunicationNode:
         self.latest_action = None
         self.action_lock = threading.Lock()  # UDP受信スレッド用
         self.control_frequency = 60 # Hz
-        # アクション記録用
-        self.action_history = []  # actionと時刻を記録するリスト
-        self.history_lock = threading.Lock()  # action_history用のロック
+        # 指数平滑フィルタの設定
+        self.filter_alpha = 0.5  # 平滑化係数（0.0〜1.0、1.0に近いほど新しい値の影響が大きい）
+        self.filtered_joint_angles = None  # フィルタ済み関節角度（初回受信時に初期化）
 
     async def initialize_robot(self):
         try:
@@ -51,8 +51,8 @@ class RobotCommunicationNode:
                 max_relative_target_4=0.03, # yaw
                 max_relative_target_5=0.01, # pitch
                 max_relative_target_6=0.03, # yaw
-                current_limit_gripper_R=0.2,
-                current_limit_gripper_L=0.2,
+                current_limit_gripper_R=0.5,
+                current_limit_gripper_L=0.5,
             )
             self.robot = MyAloha(config)
             await self.robot.connect()
@@ -206,24 +206,57 @@ class RobotCommunicationNode:
         print("ロボット制御ワーカー開始")
         try:
             first_action_time = None
+            current_latest_action = None
             while self.robot_connected and not self.stop_threads and not self.stop_event.is_set():
                 start_time = time.perf_counter()
+                # Unity側からデータが届くまで待機
                 with self.action_lock:
-                    last_action = self.latest_action
+                    if self.latest_action is not None:
+                        current_latest_action = self.latest_action.copy()
+                if current_latest_action is not None:
+                    # フィルタ処理
+                    if self.filtered_joint_angles is None:
+                        self.filtered_joint_angles = current_latest_action
+                    else:
+                        self.filtered_joint_angles = (
+                            self.filter_alpha * current_latest_action +
+                            (1 - self.filter_alpha) * self.filtered_joint_angles
+                        )
+                # データがまだ届いていない場合は待機してcontinue
+                if self.filtered_joint_angles is None:
+                    await asyncio.sleep(0.01)
+                    continue
+                action = {
+                    # 左腕
+                    "joint_L_0": float(self.filtered_joint_angles[0]),
+                    "joint_L_1": float(self.filtered_joint_angles[1]),
+                    "joint_L_2": float(self.filtered_joint_angles[2]),
+                    "joint_L_3": float(self.filtered_joint_angles[3]),
+                    "joint_L_4": float(self.filtered_joint_angles[4]),
+                    "joint_L_5": float(self.filtered_joint_angles[5]),
+                    "gripper_L": float(self.filtered_joint_angles[6]),
+                    # 右腕
+                    "joint_R_0": float(self.filtered_joint_angles[7]),
+                    "joint_R_1": float(self.filtered_joint_angles[8]),
+                    "joint_R_2": float(self.filtered_joint_angles[9]),
+                    "joint_R_3": float(self.filtered_joint_angles[10]),
+                    "joint_R_4": float(self.filtered_joint_angles[11]),
+                    "joint_R_5": float(self.filtered_joint_angles[12]),
+                    "gripper_R": float(self.filtered_joint_angles[13]),
+                }
                 if self.reset_in_progress.is_set():
                     await asyncio.sleep(0.1)
                     continue
-                if last_action is not None:
-                    if first_action_time is None:
-                        first_action_time = time.time()
-                        print("初回アクション受信を記録しました。3秒後にuse_relativeがFalseになります。")
-                    
-                    # 初回アクション受信から3秒経過したかチェック
-                    elapsed_since_first_action = time.time() - first_action_time
-                    use_relative = elapsed_since_first_action < 3.0
-                    async with self.robot_lock:
-                        if not self.reset_in_progress.is_set() and self.robot_connected:
-                            await self.robot.send_action(last_action, use_relative=use_relative)
+                if first_action_time is None:
+                    first_action_time = time.time()
+                    print("初回アクション受信を記録しました。3秒後にuse_relativeがFalseになります。")
+                
+                # 初回アクション受信から3秒経過したかチェック
+                elapsed_since_first_action = time.time() - first_action_time
+                use_relative = elapsed_since_first_action < 3.0
+                async with self.robot_lock:
+                    if not self.reset_in_progress.is_set() and self.robot_connected:
+                        await self.robot.send_action(action, use_relative=use_relative)
                 elapsed_time = time.perf_counter() - start_time
                 # print(f"ロボット制御ワーカー周期処理時間: {elapsed_time:.4f}秒")
                 sleep_duration = 1.0 / self.control_frequency - elapsed_time
@@ -267,34 +300,8 @@ class RobotCommunicationNode:
                         joint_angles[12] = -joint_angles[12]
                         # print(f"受信: {joint_angles[7]}")
                         if mode == 1 and self.robot_connected:
-                            action = {
-                                # 左腕
-                                "joint_L_0": 0.0, # joint_angles[0], # ok
-                                "joint_L_1": joint_angles[1], # ok
-                                "joint_L_2": joint_angles[2], # ok
-                                "joint_L_3": 0.0, # joint_angles[3], # ok
-                                "joint_L_4": 0.0, # joint_angles[4], # ok
-                                "joint_L_5": 0.0, # joint_angles[5], # ok
-                                "gripper_L": 0.0, # joint_angles[6], # ok
-                                # 右腕
-                                "joint_R_0": 0.0, # joint_angles[7], # ok
-                                "joint_R_1": joint_angles[8], # ok
-                                "joint_R_2": joint_angles[9], # ok
-                                "joint_R_3": 0.0, # joint_angles[10], # ok
-                                "joint_R_4": 0.0, # joint_angles[11], # ok
-                                "joint_R_5": 0.0, # joint_angles[12], # ok
-                                "gripper_R": 0.0, # joint_angles[13], # ok
-                            }
                             with self.action_lock:
-                                self.latest_action = action
-                            # actionと時刻を記録
-                            timestamp = time.time()
-                            with self.history_lock:
-                                self.action_history.append({
-                                    'timestamp': timestamp,
-                                    'action': action.copy()
-                                })
-                            # self.send_robot_command_async(action)
+                                self.latest_action = np.array(joint_angles, dtype=np.float32)
                 except socket.timeout:
                     continue
                 except Exception as e:
@@ -366,39 +373,7 @@ class RobotCommunicationNode:
                 self.robot_connected = False
             except Exception as e:
                 print(f"ロボット切断エラー: {e}")
-        # アクション履歴をCSVに保存
-        self.save_action_history_to_csv()
         print("完全クリーンアップ完了")
-
-    def save_action_history_to_csv(self):
-        """アクション履歴をCSVファイルに保存"""
-        if not self.action_history:
-            print("保存するアクション履歴がありません")
-            return
-        
-        try:
-            # ファイル名にタイムスタンプを含める
-            filename = f"action_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            
-            with self.history_lock:
-                # CSVのヘッダーを作成（最初のアクションのキーを使用）
-                if self.action_history:
-                    fieldnames = ['timestamp'] + list(self.action_history[0]['action'].keys())
-                    
-                    with open(filename, 'w', newline='') as csvfile:
-                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                        writer.writeheader()
-                        
-                        for record in self.action_history:
-                            row = {'timestamp': record['timestamp']}
-                            row.update(record['action'])
-                            writer.writerow(row)
-                    
-                    print(f"アクション履歴を {filename} に保存しました（{len(self.action_history)}件）")
-        except Exception as e:
-            print(f"CSV保存エラー: {e}")
-            import traceback
-            traceback.print_exc()
 
     async def start_server(self):
         print(f"WebSocketサーバーを開始: ポート{self.websocket_port}")
