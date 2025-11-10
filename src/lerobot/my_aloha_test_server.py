@@ -3,7 +3,7 @@
 """
 Unity Communicator用のダミー通信ノード
 WebSocket接続、UDP関節角度受信をシミュレート
-リアルタイムプロット機能付き
+Aloha Transfer環境でActionを実行
 """
 
 import asyncio
@@ -15,50 +15,45 @@ import time
 import threading
 from typing import Optional
 import numpy as np
-from collections import deque
-
-# matplotlibの設定（Qt5バックエンドを使用）
-import matplotlib
-matplotlib.use('Qt5Agg')
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+from lerobot.envs.factory import make_env_config, make_env
 
 class DummyCommunicationNode:
     def __init__(self):
         # 通信設定
         self.websocket_port = 8080
         self.unity_joint_port: Optional[int] = None
-        
         # 通信状態
         self.is_connected = False
         self.is_receiving_joints = False
-        
         # スレッド制御
         self.joint_thread: Optional[threading.Thread] = None
         self.websocket_thread: Optional[threading.Thread] = None
         self.stop_threads = False
-        
         # データ受信周期
         self.receive_interval = 0.01
-        
         # 指数平滑フィルタの設定
         self.filter_alpha = 0.5  # 平滑化係数（0.0〜1.0、1.0に近いほど新しい値の影響が大きい）
         self.filtered_joint_angles = None  # フィルタ済み関節角度（初回受信時に初期化）
-        
-        # プロット設定（ユーザーが変更可能）
-        self.plot_joint_indices = [7]  # プロットする関節のインデックスリスト
-        self.plot_time_window = 10.0   # 表示する時間範囲（秒）
-        
-        # プロット用データキュー（スレッドセーフ）
-        # (timestamp, joint_angles)のタプルを保存
-        max_data_points = 1000  # 最大データ点数
-        self.data_queue = deque(maxlen=max_data_points)
         self.delta_angle = None
         
-        # プロット用の変数
-        self.fig = None
-        self.ax = None
-        self.scatters = []
+        # Aloha Transfer環境の作成
+        print("Aloha Transfer環境を初期化中...")
+        self.env_cfg = make_env_config("aloha", task="AlohaTransferCube-v0")
+        env_dict = make_env(self.env_cfg, n_envs=1)
+        self.vec_env = env_dict["aloha"][0]
+        print("環境の初期化完了")
+        
+        # 環境をリセット
+        self.reset_environment()
+
+    def reset_environment(self):
+        """環境をリセット"""
+        print("環境をリセット中...")
+        observation, info = self.vec_env.reset()
+        self.filtered_joint_angles = None
+        self.delta_angle = None
+        print("環境のリセット完了")
+        return observation, info
 
     async def websocket_handler(self, websocket):
         """WebSocket接続ハンドラー"""
@@ -112,6 +107,8 @@ class DummyCommunicationNode:
     async def handle_reset_request(self, websocket):
         """リセット要求処理"""
         try:
+            # 環境をリセット
+            self.reset_environment()
             await asyncio.sleep(2.0)  # 2秒間のリセット処理をシミュレート
             print("ロボットリセット処理が完了しました")
             response = {"status": "reset_complete", "message": "ロボットリセットが完了しました"}
@@ -136,72 +133,72 @@ class DummyCommunicationNode:
 
     def joint_receiver_thread(self):
         """関節角度受信スレッド"""
-        def limit_change(new, old):
-            max_relative_target = 0.03
-            delta = new - old
-            delta = (delta + np.pi) % (2 * np.pi) - np.pi
-            if abs(delta) > max_relative_target:
-                delta = max_relative_target * np.sign(delta)
-            new = old + delta
-            return (new + np.pi) % (2 * np.pi) - np.pi
-        
         print(f"関節角度受信開始: ポート{self.unity_joint_port}")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('0.0.0.0', self.unity_joint_port))
         sock.settimeout(1.0)
         sock.setblocking(False)
-
         start_time = time.time()
-
         try:
             while self.is_receiving_joints and not self.stop_threads:
                 latest_data_packet = None
                 addr = None
                 try:
-                    # --- 修正点2： バッファが空になるまでループで読み出す ---
+                    # バッファが空になるまでループで読み出す
                     while True:
-                        # バッファからデータを読み出す
-                        # 成功するたびに latest_data_packet が上書きされていく
                         latest_data_packet, addr = sock.recvfrom(1024)
                 except (BlockingIOError, socket.error):
-                    # BlockingIOError (Windows) または socket.error (Linux) は、
-                    # 「バッファが空で、もう読み出すデータがない」ことを示す
-                    # これはエラーではなく、正常な動作
+                    # バッファが空で、もう読み出すデータがない
                     pass
+                
                 if latest_data_packet and len(latest_data_packet) >= 57:
-                        mode = latest_data_packet[0]
-                        joint_angles = []
-                        for i in range(14):
-                            offset = 1 + i * 4
-                            angle = struct.unpack('<f', latest_data_packet[offset:offset+4])[0]
-                            joint_angles.append(angle)
-                        # 指数平滑フィルタの適用
-                        if self.filtered_joint_angles is None:
-                            # 初回受信時は受信値をそのまま使用
-                            self.filtered_joint_angles = np.array(joint_angles)
-                        else:
-                            self.delta_angle = -self.filtered_joint_angles
-                            # 指数平滑フィルタを適用
-                            # filtered = alpha * new + (1 - alpha) * old_filtered
-                            self.filtered_joint_angles = (
-                                self.filter_alpha * np.array(joint_angles) +
-                                (1.0 - self.filter_alpha) * self.filtered_joint_angles
-                            )
-                            self.delta_angle += self.filtered_joint_angles
-                        # print(f"R joint 1: {joint_angles[7] * 180.0 / np.pi}")
+                    mode = latest_data_packet[0]
+                    joint_angles = []
+                    for i in range(14):
+                        offset = 1 + i * 4
+                        angle = struct.unpack('<f', latest_data_packet[offset:offset+4])[0]
+                        joint_angles.append(angle)
+                    
+                    # 指数平滑フィルタの適用
+                    if self.filtered_joint_angles is None:
+                        # 初回受信時は受信値をそのまま使用
+                        self.filtered_joint_angles = np.array(joint_angles)
+                    else:
+                        self.delta_angle = -self.filtered_joint_angles
+                        # 指数平滑フィルタを適用
+                        self.filtered_joint_angles = (
+                            self.filter_alpha * np.array(joint_angles) +
+                            (1.0 - self.filter_alpha) * self.filtered_joint_angles
+                        )
+                        self.delta_angle += self.filtered_joint_angles
                 else:
                     # パケットをロスしている際にデータを補完する処理を行う
                     if self.delta_angle is not None:
                         self.filtered_joint_angles += self.delta_angle
+                
+                # 環境にActionを反映
                 if self.filtered_joint_angles is not None:
-                    # タイムスタンプと共にフィルタ済みデータをキューに追加
-                    timestamp = time.time()
-                    self.data_queue.append((timestamp, self.filtered_joint_angles.tolist()))
+                    try:
+                        # Actionを環境に適用
+                        action = self.filtered_joint_angles.reshape(1, -1)  # (1, 14)の形状に変換
+                        observation, reward, terminated, truncated, info = self.vec_env.step(action)
+                        
+                        # エピソード終了時の処理
+                        if terminated[0] or truncated[0]:
+                            print(f"エピソード終了 - reward: {reward[0]:.3f}, terminated: {terminated[0]}, truncated: {truncated[0]}")
+                            # 自動的にリセット（AutoresetModeがSAME_STEPなので自動リセットされる）
+                    except Exception as e:
+                        print(f"環境ステップエラー: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
                 time.sleep(max(0.0, self.receive_interval - (time.time() - start_time)))
                 start_time = time.time()
         except Exception as e:
             print(f"関節角度受信スレッドエラー: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             sock.close()
             print("関節角度受信終了")
@@ -215,6 +212,14 @@ class DummyCommunicationNode:
         if self.joint_thread and self.joint_thread.is_alive():
             self.joint_thread.join(timeout=2)
         self.joint_thread = None
+        
+        # 環境のクリーンアップ
+        if hasattr(self, 'vec_env') and self.vec_env is not None:
+            try:
+                self.vec_env.close()
+                print("環境をクローズしました")
+            except Exception as e:
+                print(f"環境クローズエラー: {e}")
         
         print("クリーンアップ完了")
 
@@ -239,122 +244,27 @@ class DummyCommunicationNode:
         """WebSocketサーバーを別スレッドで開始"""
         def run_server():
             asyncio.run(self.start_server())
-        
         self.websocket_thread = threading.Thread(target=run_server)
         self.websocket_thread.daemon = True
         self.websocket_thread.start()
         print("WebSocketサーバースレッドを開始しました")
 
-    def setup_plot(self):
-        """プロットの初期設定"""
-        self.fig, self.ax = plt.subplots(figsize=(10, 6))
-        self.ax.set_xlabel('Time (seconds)')
-        self.ax.set_ylabel('Angle (degree)')
-        self.ax.set_title('Real-time Joint Angle Plot')
-        self.ax.grid(True)
-        
-        # 各関節に対してscatterオブジェクトを作成
-        colors = ['b', 'r', 'g', 'c', 'm', 'y', 'k']
-        self.scatters = []
-        for i, joint_idx in enumerate(self.plot_joint_indices):
-            color = colors[i % len(colors)]
-            scatter = self.ax.scatter([], [], c=color, label=f'Joint {joint_idx}', s=20, alpha=0.6)
-            self.scatters.append(scatter)
-        
-        self.ax.legend()
-
-    def update_plot(self, frame):
-        """プロット更新関数（FuncAnimationから呼ばれる）"""
-        if len(self.data_queue) == 0:
-            return self.scatters
-        
-        # 現在時刻を取得
-        current_time = time.time()
-        
-        # 各関節のデータを準備
-        plot_data = {idx: {'times': [], 'angles': []} for idx in self.plot_joint_indices}
-        
-        # キューからデータを取得
-        for timestamp, joint_angles in self.data_queue:
-            relative_time = timestamp - current_time
-            
-            # 表示範囲内のデータのみ使用
-            if relative_time >= -self.plot_time_window:
-                for joint_idx in self.plot_joint_indices:
-                    if joint_idx < len(joint_angles):
-                        plot_data[joint_idx]['times'].append(relative_time)
-                        # ラジアンから度に変換
-                        angle_deg = joint_angles[joint_idx] * 180.0 / np.pi
-                        plot_data[joint_idx]['angles'].append(angle_deg)
-        
-        # 各scatterを更新
-        for i, joint_idx in enumerate(self.plot_joint_indices):
-            times = plot_data[joint_idx]['times']
-            angles = plot_data[joint_idx]['angles']
-            if len(times) > 0:
-                # scatterの位置を更新
-                offsets = np.column_stack([times, angles])
-                self.scatters[i].set_offsets(offsets)
-            else:
-                # データがない場合は空にする
-                self.scatters[i].set_offsets(np.empty((0, 2)))
-        
-        # 軸範囲を更新
-        if any(len(plot_data[idx]['times']) > 0 for idx in self.plot_joint_indices):
-            self.ax.set_xlim(-self.plot_time_window, 0)
-            
-            # Y軸の範囲を自動調整
-            all_angles = []
-            for joint_idx in self.plot_joint_indices:
-                all_angles.extend(plot_data[joint_idx]['angles'])
-            
-            if all_angles:
-                min_angle = min(all_angles)
-                max_angle = max(all_angles)
-                margin = (max_angle - min_angle) * 0.1 if max_angle != min_angle else 10
-                self.ax.set_ylim(min_angle - margin, max_angle + margin)
-        
-        return self.scatters
-
-    def start_plot(self):
-        """プロット表示を開始（メインスレッドで実行）"""
-        self.setup_plot()
-        
-        # アニメーションを設定（50ms間隔で更新）
-        ani = FuncAnimation(
-            self.fig, 
-            self.update_plot, 
-            interval=50,
-            blit=True
-        )
-        
-        plt.show()
-
     def run(self):
         """メインの実行関数"""
         print("=" * 60)
-        print("UDP Test Server Starting")
-        print(f"Plot target joints: {self.plot_joint_indices}")
-        print(f"Time window: {self.plot_time_window} seconds")
+        print("UDP Test Server with Aloha Transfer Environment")
         print("=" * 60)
-        
         # WebSocketサーバーを別スレッドで開始
         self.start_server_thread()
-        
-        # matplotlibをメインスレッドで実行
+        # メインスレッドで待機
         try:
-            self.start_plot()
+            while True:
+                time.sleep(1)
         except KeyboardInterrupt:
-            print("\nPlot closed")
+            print("\nサーバー停止中...")
         finally:
             self.cleanup()
-            plt.close('all')
 
 if __name__ == "__main__":
     node = DummyCommunicationNode()
-    
-    # Plot settings (change as needed)
-    node.plot_joint_indices = [7]  # Joint indices to plot
-    node.plot_time_window = 10.0   # Time window in seconds
-    
     node.run()
