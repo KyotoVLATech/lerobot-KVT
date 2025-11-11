@@ -48,7 +48,7 @@ class RobotCommunicationNode:
                 current_limit_gripper_R=0.5,
                 current_limit_gripper_L=0.5,
             )
-            self.robot = MyAloha(config)
+            self.robot = MyAloha(config, debug=True)
             await self.robot.connect()
             self.robot_connected = True
             await asyncio.sleep(2.0)
@@ -136,10 +136,10 @@ class RobotCommunicationNode:
                             print("警告: ロボット制御タスクが停止できませんでした")
                             self.robot_control_task.cancel()
                     home_action = self.robot.old_action.copy()
-                    home_action[4:7] = 0.0  # L_3, L_4, L_5
-                    home_action[11:14] = 0.0  # R_3, R_4, R_5
+                    home_action[3:7] = 0.0
+                    home_action[10:14] = 0.0
                     await self.robot.send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(2.0)
                     home_action = np.zeros_like(home_action)
                     await self.robot.send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
                     await asyncio.sleep(1.0)
@@ -303,10 +303,10 @@ class RobotCommunicationNode:
             try:
                 print("ロボットを初期位置に戻しています...")
                 home_action = self.robot.old_action.copy()
-                home_action[4:7] = 0.0  # L_3, L_4, L_5
-                home_action[11:14] = 0.0  # R_3, R_4, R_5
+                home_action[3:7] = 0.0
+                home_action[10:14] = 0.0
                 await self.robot.send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(2.0)
                 home_action = np.zeros_like(home_action)
                 await self.robot.send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
                 await asyncio.sleep(1.0)

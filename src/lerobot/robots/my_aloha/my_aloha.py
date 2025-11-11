@@ -14,9 +14,11 @@ class MyAloha():
     def __init__(
         self,
         config: MyAlohaConfig,
+        debug: bool = False,
     ):
         # super().__init__(config)
         self.config = config
+        self.debug = debug
         self.aloha = None
         # old_action を ndarray で管理（14要素：L側7要素 + R側7要素）
         self.old_action = np.zeros(14, dtype=np.float32)
@@ -25,17 +27,18 @@ class MyAloha():
         self.filtered_joint_angles = None
 
     async def connect(self) -> None:
-        self.aloha = AlohaController(
-            self.config.right_robstride_port,
-            self.config.left_robstride_port,
-            self.config.right_dynamixel_port,
-            self.config.left_dynamixel_port,
-        )
-        # AlohaControllerを非同期で初期化
-        await self.aloha.__aenter__()
-        # グリッパー電流を設定
-        await self.aloha.set_gripper_current("left", self.config.current_limit_gripper_L*1000)
-        await self.aloha.set_gripper_current("right", self.config.current_limit_gripper_R*1000)
+        if not self.debug:
+            self.aloha = AlohaController(
+                self.config.right_robstride_port,
+                self.config.left_robstride_port,
+                self.config.right_dynamixel_port,
+                self.config.left_dynamixel_port,
+            )
+            # AlohaControllerを非同期で初期化
+            await self.aloha.__aenter__()
+            # グリッパー電流を設定
+            await self.aloha.set_gripper_current("left", self.config.current_limit_gripper_L*1000)
+            await self.aloha.set_gripper_current("right", self.config.current_limit_gripper_R*1000)
 
     async def send_action(self, action: np.ndarray, use_relative=False, use_filter=True, use_unwrap=True) -> dict[str, float]:
         # 1. unwrap 処理（ndarray で実行）
@@ -84,13 +87,12 @@ class MyAloha():
             motor6=float(final_action[12]),
             motor7=-float(final_action[13])*np.pi/3,
         )
-        
-        print(f"Final Action R_3: {final_action_R.motor4*180/np.pi:.3f}")
-        
         # 5. 最終的なアクションをロボットに送信し、状態を更新する
-        await self.aloha.update_pos(final_action_R, final_action_L)
+        if not self.debug:
+            await self.aloha.update_pos(final_action_R, final_action_L)
+        else:
+            print(f"L: {final_action_L.motor4*180/np.pi:.3f} R: {final_action_R.motor4*180/np.pi:.3f}")
         self.old_action = final_action.copy()
-        
         return action
 
     def _unwrap_angle_target(self, current: np.ndarray, old: np.ndarray) -> np.ndarray:
