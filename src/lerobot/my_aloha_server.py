@@ -9,9 +9,6 @@ import threading
 import numpy as np
 from typing import Optional
 import time
-import queue
-import csv
-from datetime import datetime
 from lerobot.robots.my_aloha import MyAloha, MyAlohaConfig
 
 class RobotCommunicationNode:
@@ -34,17 +31,14 @@ class RobotCommunicationNode:
         self.latest_action = None
         self.action_lock = threading.Lock()  # UDP受信スレッド用
         self.control_frequency = 60 # Hz
-        # 指数平滑フィルタの設定
-        self.filter_alpha = 0.5  # 平滑化係数（0.0〜1.0、1.0に近いほど新しい値の影響が大きい）
-        self.filtered_joint_angles = None  # フィルタ済み関節角度（初回受信時に初期化）
 
     async def initialize_robot(self):
         try:
             config = MyAlohaConfig(
-                right_dynamixel_port="/dev/ttyUSB1",
-                right_robstride_port="/dev/ttyUSB0",
-                left_robstride_port="/dev/ttyUSB2",
-                left_dynamixel_port="/dev/ttyUSB3",
+                right_dynamixel_port="/dev/ttyUSB0",
+                right_robstride_port="/dev/ttyUSB2",
+                left_robstride_port="/dev/ttyUSB3",
+                left_dynamixel_port="/dev/ttyUSB1",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
                 max_relative_target_3=0.01, # pitch
@@ -141,21 +135,13 @@ class RobotCommunicationNode:
                         except asyncio.TimeoutError:
                             print("警告: ロボット制御タスクが停止できませんでした")
                             self.robot_control_task.cancel()
-                    home_action = {
-                        "joint_L_0": self.robot.old_action_L.motor1, "joint_L_1": self.robot.old_action_L.motor2, "joint_L_2": self.robot.old_action_L.motor3,
-                        "joint_L_3": 0.0, "joint_L_4": 0.0, "joint_L_5": 0.0, "gripper_L": 0.0,
-                        "joint_R_0": self.robot.old_action_R.motor1, "joint_R_1": self.robot.old_action_R.motor2, "joint_R_2": self.robot.old_action_R.motor3,
-                        "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
-                    }
-                    await self.robot.send_action(home_action, use_relative=False)
+                    home_action = self.robot.old_action.copy()
+                    home_action[4:7] = 0.0  # L_3, L_4, L_5
+                    home_action[11:14] = 0.0  # R_3, R_4, R_5
+                    await self.robot.send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
                     await asyncio.sleep(1.0)
-                    home_action = {
-                        "joint_L_0": 0.0, "joint_L_1": 0.0, "joint_L_2": 0.0,
-                        "joint_L_3": 0.0, "joint_L_4": 0.0, "joint_L_5": 0.0, "gripper_L": 0.0,
-                        "joint_R_0": 0.0, "joint_R_1": 0.0, "joint_R_2": 0.0,
-                        "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
-                    }
-                    await self.robot.send_action(home_action, use_relative=False)
+                    home_action = np.zeros_like(home_action)
+                    await self.robot.send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
                     await asyncio.sleep(1.0)
                     print("ホームポジション移動完了")
                 finally:
@@ -213,55 +199,28 @@ class RobotCommunicationNode:
                 with self.action_lock:
                     if self.latest_action is not None:
                         current_latest_action = self.latest_action.copy()
-                if current_latest_action is not None:
-                    # フィルタ処理
-                    if self.filtered_joint_angles is None:
-                        self.filtered_joint_angles = current_latest_action
-                    else:
-                        self.filtered_joint_angles = (
-                            self.filter_alpha * current_latest_action +
-                            (1 - self.filter_alpha) * self.filtered_joint_angles
-                        )
+                
                 # データがまだ届いていない場合は待機してcontinue
-                if self.filtered_joint_angles is None:
+                if current_latest_action is None:
                     await asyncio.sleep(0.01)
                     continue
-                action = {
-                    # 左腕
-                    "joint_L_0": float(self.filtered_joint_angles[0]),
-                    "joint_L_1": float(self.filtered_joint_angles[1]),
-                    "joint_L_2": float(self.filtered_joint_angles[2]),
-                    "joint_L_3": float(self.filtered_joint_angles[3]),
-                    "joint_L_4": float(self.filtered_joint_angles[4]),
-                    "joint_L_5": float(self.filtered_joint_angles[5]),
-                    "gripper_L": float(self.filtered_joint_angles[6]),
-                    # 右腕
-                    "joint_R_0": float(self.filtered_joint_angles[7]),
-                    "joint_R_1": float(self.filtered_joint_angles[8]),
-                    "joint_R_2": float(self.filtered_joint_angles[9]),
-                    "joint_R_3": float(self.filtered_joint_angles[10]),
-                    "joint_R_4": float(self.filtered_joint_angles[11]),
-                    "joint_R_5": float(self.filtered_joint_angles[12]),
-                    "gripper_R": float(self.filtered_joint_angles[13]),
-                }
+                
                 if self.reset_in_progress.is_set():
                     await asyncio.sleep(0.1)
                     continue
+                
                 if first_action_time is None:
                     first_action_time = time.time()
                     print("初回アクション受信を記録しました。3秒後にuse_relativeがFalseになります。")
-                
                 # 初回アクション受信から3秒経過したかチェック
                 elapsed_since_first_action = time.time() - first_action_time
                 use_relative = elapsed_since_first_action < 3.0
                 async with self.robot_lock:
                     if not self.reset_in_progress.is_set() and self.robot_connected:
-                        await self.robot.send_action(action, use_relative=use_relative)
+                        await self.robot.send_action(current_latest_action, use_relative=use_relative, use_filter=not use_relative)
                 elapsed_time = time.perf_counter() - start_time
-                # print(f"ロボット制御ワーカー周期処理時間: {elapsed_time:.4f}秒")
                 sleep_duration = 1.0 / self.control_frequency - elapsed_time
                 if sleep_duration > 0:
-                    # print(f"ロボット制御ワーカー待機: {sleep_duration:.4f}秒")
                     await asyncio.sleep(sleep_duration)
         except asyncio.CancelledError:
             print("ロボット制御ワーカーがキャンセルされました")
@@ -343,21 +302,13 @@ class RobotCommunicationNode:
         if self.robot_connected and self.robot:
             try:
                 print("ロボットを初期位置に戻しています...")
-                home_action = {
-                    "joint_L_0": self.robot.old_action_L.motor1, "joint_L_1": self.robot.old_action_L.motor2, "joint_L_2": self.robot.old_action_L.motor3,
-                    "joint_L_3": 0.0, "joint_L_4": 0.0, "joint_L_5": 0.0, "gripper_L": 0.0,
-                    "joint_R_0": self.robot.old_action_R.motor1, "joint_R_1": self.robot.old_action_R.motor2, "joint_R_2": self.robot.old_action_R.motor3,
-                    "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
-                }
-                await self.robot.send_action(home_action, use_relative=False)
+                home_action = self.robot.old_action.copy()
+                home_action[4:7] = 0.0  # L_3, L_4, L_5
+                home_action[11:14] = 0.0  # R_3, R_4, R_5
+                await self.robot.send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
                 await asyncio.sleep(1.0)
-                home_action = {
-                    "joint_L_0": 0.0, "joint_L_1": 0.0, "joint_L_2": 0.0,
-                    "joint_L_3": 0.0, "joint_L_4": 0.0, "joint_L_5": 0.0, "gripper_L": 0.0,
-                    "joint_R_0": 0.0, "joint_R_1": 0.0, "joint_R_2": 0.0,
-                    "joint_R_3": 0.0, "joint_R_4": 0.0, "joint_R_5": 0.0, "gripper_R": 0.0,
-                }
-                await self.robot.send_action(home_action, use_relative=False)
+                home_action = np.zeros_like(home_action)
+                await self.robot.send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
                 await asyncio.sleep(1.0)
                 print("ロボット初期位置復帰完了")
             except Exception as e:

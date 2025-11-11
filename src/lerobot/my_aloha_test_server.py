@@ -354,7 +354,7 @@ if __name__ == "__main__":
     node = DummyCommunicationNode()
     
     # Plot settings (change as needed)
-    node.plot_joint_indices = [7]  # Joint indices to plot
+    node.plot_joint_indices = [10]  # Joint indices to plot
     node.plot_time_window = 10.0   # Time window in seconds
     
     node.run()
