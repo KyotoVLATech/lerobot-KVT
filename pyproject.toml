@@ -86,6 +86,7 @@ dependencies = [
     "dynamixel_sdk @ git+https://github.com/ROBOTIS-GIT/DynamixelSDK.git#subdirectory=python",
     "pyserial-asyncio>=0.6",
     "pyqt5>=5.15.11",
+    "pyrealsense2>=2.56.5.9235",
 ]
 
 # Optional dependencies

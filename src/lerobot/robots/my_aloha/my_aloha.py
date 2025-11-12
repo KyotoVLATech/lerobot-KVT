@@ -1,11 +1,28 @@
-# from ..robot import Robot
 from lerobot.robots.my_aloha.config_my_aloha import MyAlohaConfig
-# from .aloha_abc import AlohaArm, AlohaController
 import numpy as np
 import os
 import sys
+from typing import Any
+import asyncio
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../.."))
 from kvt_aloha_python_controller.kvt_aloha.aloha_controller import AlohaController, AlohaArm
+
+JOINT_NAMES = [
+    "joint_L_0",
+    "joint_L_1",
+    "joint_L_2",
+    "joint_L_3",
+    "joint_L_4",
+    "joint_L_5",
+    "gripper_L",
+    "joint_R_0",
+    "joint_R_1",
+    "joint_R_2",
+    "joint_R_3",
+    "joint_R_4",
+    "joint_R_5",
+    "gripper_R",
+]
 
 class MyAloha():
     config_class = MyAlohaConfig
@@ -15,16 +32,58 @@ class MyAloha():
         self,
         config: MyAlohaConfig,
         debug: bool = False,
+        cameras: dict | None = None,
     ):
         # super().__init__(config)
         self.config = config
         self.debug = debug
         self.aloha = None
+        self.cameras = cameras if cameras is not None else {}
         # old_action を ndarray で管理（14要素：L側7要素 + R側7要素）
         self.old_action = np.zeros(14, dtype=np.float32)
         # 指数平滑化フィルタの設定
         self.filter_alpha = 0.5
         self.filtered_joint_angles = None
+
+    @property
+    def observation_features(self) -> dict:
+        """
+        観測データの構造を定義
+        - 画像: 各カメラごとにLeRobotのデータセット形式で定義
+        - 関節角度: 状態ベクトルとして定義
+        """
+        features = {}
+        # カメラ画像の特徴 - データセット形式では (height, width, channels)
+        for name in self.cameras.keys():
+            features[name] = (480, 640, 3)
+        # 関節角度の特徴 - 状態ベクトルとして定義
+        for joint_name in JOINT_NAMES:
+            features[joint_name] = float
+        return features
+
+    @property
+    def action_features(self) -> dict:
+        """
+        アクションデータの構造を定義
+        - 14個の関節角度目標値
+        """
+        features = {}
+        for joint_name in JOINT_NAMES:
+            features[joint_name] = float
+        return features
+
+    def get_observation(self) -> dict[str, Any]:
+        """
+        現在の観測データを取得
+        - カメラ画像: そのまま（H, W, C形式で取得、データセット保存時に適切に処理される）
+        - 関節角度: "state"という単一のキーで14要素のベクトルとして返す
+        """
+        obs = {}
+        for name, camera in self.cameras.items():
+            obs[name] = camera.read()
+        for i, joint_name in enumerate(JOINT_NAMES):
+            obs[joint_name] = self.old_action[i]
+        return obs
 
     async def connect(self) -> None:
         if not self.debug:
@@ -40,7 +99,29 @@ class MyAloha():
             await self.aloha.set_gripper_current("left", self.config.current_limit_gripper_L*1000)
             await self.aloha.set_gripper_current("right", self.config.current_limit_gripper_R*1000)
 
-    async def send_action(self, action: np.ndarray, use_relative=False, use_filter=True, use_unwrap=True) -> dict[str, float]:
+    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        action_L = AlohaArm(
+            motor1=action.get(JOINT_NAMES[0], self.old_action_L.motor1),
+            motor2=action.get(JOINT_NAMES[1], self.old_action_L.motor2),
+            motor3=action.get(JOINT_NAMES[2], self.old_action_L.motor3),
+            motor4=action.get(JOINT_NAMES[3], self.old_action_L.motor4),
+            motor5=action.get(JOINT_NAMES[4], self.old_action_L.motor5),
+            motor6=action.get(JOINT_NAMES[5], self.old_action_L.motor6),
+            motor7=-action.get(JOINT_NAMES[6], self.old_action_L.motor7)*np.pi/3,
+        )
+        action_R = AlohaArm(
+            motor1=action.get(JOINT_NAMES[7], self.old_action_R.motor1),
+            motor2=action.get(JOINT_NAMES[8], self.old_action_R.motor2),
+            motor3=action.get(JOINT_NAMES[9], self.old_action_R.motor3),
+            motor4=action.get(JOINT_NAMES[10], self.old_action_R.motor4),
+            motor5=action.get(JOINT_NAMES[11], self.old_action_R.motor5),
+            motor6=action.get(JOINT_NAMES[12], self.old_action_R.motor6),
+            motor7=-action.get(JOINT_NAMES[13], self.old_action_R.motor7)*np.pi/3,
+        )
+        asyncio.run(self.aloha.update_pos(action_R, action_L)) # ループが既にある場合はバグるかも
+        return action
+
+    async def async_send_action(self, action: np.ndarray, use_relative=False, use_filter=True, use_unwrap=True) -> dict[str, float]:
         # 1. unwrap 処理（ndarray で実行）
         if use_unwrap:
             unwrapped_action = self._unwrap_angle_target(action, self.old_action)
@@ -91,7 +172,8 @@ class MyAloha():
         if not self.debug:
             await self.aloha.update_pos(final_action_R, final_action_L)
         else:
-            print(f"L: {final_action_L.motor4*180/np.pi:.3f} R: {final_action_R.motor4*180/np.pi:.3f}")
+            # print(f"L: {final_action_L.motor4*180/np.pi:.3f} R: {final_action_R.motor4*180/np.pi:.3f}")
+            pass
         self.old_action = final_action.copy()
         return action
 
