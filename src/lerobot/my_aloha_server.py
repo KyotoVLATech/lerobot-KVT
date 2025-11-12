@@ -199,10 +199,9 @@ class RobotCommunicationNode:
             await websocket.send(json.dumps(response))
 
     async def stop_recording(self):
-        """記録を停止"""
-        if self.is_recording or self.recording_ready:
+        """記録を停止（エピソードの記録のみ停止、リソースは保持）"""
+        if self.is_recording:
             self.is_recording = False
-            self.recording_ready = False
             if self.recording_task and not self.recording_task.done():
                 self.recording_task.cancel()
                 try:
@@ -210,10 +209,10 @@ class RobotCommunicationNode:
                 except asyncio.CancelledError:
                     pass
             self.recording_task = None
-            print("記録を停止しました")
+            print("記録を停止しました（リソースは保持）")
 
     async def save_episode(self, websocket):
-        """エピソードを保存"""
+        """エピソードを保存（データセットとリソースは保持）"""
         try:
             await self.stop_recording()
             
@@ -226,10 +225,10 @@ class RobotCommunicationNode:
             self.current_dataset.save_episode()
             print("エピソード保存完了")
             
-            # クリーンアップ
-            await self._cleanup_recording()
+            # データセットとリソースは保持（次のエピソードのため）
+            # recording_readyは維持して、リセット後の次の記録に備える
             
-            response = {"status": "save_complete", "message": "エピソードを保存しました"}
+            response = {"status": "save_complete", "message": "エピソードを保存しました。次のエピソードの準備ができています"}
             await websocket.send(json.dumps(response))
             
         except Exception as e:
@@ -240,7 +239,7 @@ class RobotCommunicationNode:
             await websocket.send(json.dumps(response))
 
     async def discard_episode(self, websocket):
-        """エピソードを破棄"""
+        """エピソードを破棄（データセットとリソースは保持）"""
         try:
             await self.stop_recording()
             
@@ -253,10 +252,10 @@ class RobotCommunicationNode:
             self.current_dataset.clear_episode_buffer()
             print("エピソード破棄完了")
             
-            # クリーンアップ
-            await self._cleanup_recording()
+            # データセットとリソースは保持（次のエピソードのため）
+            # recording_readyは維持して、リセット後の次の記録に備える
             
-            response = {"status": "discard_complete", "message": "エピソードを破棄しました"}
+            response = {"status": "discard_complete", "message": "エピソードを破棄しました。次のエピソードの準備ができています"}
             await websocket.send(json.dumps(response))
             
         except Exception as e:
@@ -266,8 +265,18 @@ class RobotCommunicationNode:
             response = {"status": "discard_error", "message": f"破棄エラー: {e}"}
             await websocket.send(json.dumps(response))
 
-    async def _cleanup_recording(self):
-        """記録関連のリソースをクリーンアップ"""
+    async def _prepare_next_episode(self):
+        """次のエピソード記録の準備"""
+        if self.recording_ready and self.current_dataset is not None:
+            # 新しい記録タスクを開始
+            self.recording_task = asyncio.create_task(self.record_episode())
+            print("次のエピソードの記録準備完了")
+
+    async def _full_cleanup_recording(self):
+        """記録関連のリソースを完全にクリーンアップ"""
+        # まず記録を停止
+        await self.stop_recording()
+        
         # VideoEncodingManagerを終了
         if self.video_encoding_manager:
             try:
@@ -290,6 +299,8 @@ class RobotCommunicationNode:
         
         self.current_dataset = None
         self.recording_start_time = None
+        self.recording_ready = False
+        print("記録リソースを完全にクリーンアップしました")
 
     async def record_episode(self):
         """30FPSで画像と関節角度を記録"""
@@ -404,9 +415,9 @@ class RobotCommunicationNode:
                         await self.start_recording(websocket)
                     elif command == 'teleoperation':
                         print("teleoperation要求を受信しました")
-                        # 記録中または記録準備中であれば停止
+                        # 記録中または記録準備中であれば完全にクリーンアップ
                         if self.is_recording or self.recording_ready:
-                            await self.stop_recording()
+                            await self._full_cleanup_recording()
                             print("記録を停止し、テレオペレーションモードに切り替えました")
                         response = {"status": "teleoperation_mode", "message": "テレオペレーションモードに切り替えました"}
                         await websocket.send(json.dumps(response))
@@ -466,6 +477,9 @@ class RobotCommunicationNode:
                             self.joint_thread.daemon = True
                             self.joint_thread.start()
                         await self.start_robot_control_task()
+                    # 記録モードの場合、次のエピソードの準備
+                    if self.recording_ready and not self.is_recording:
+                        await self._prepare_next_episode()
                     self.reset_in_progress.clear()
             print("ロボットリセット処理完了")
             response = {"status": "reset_complete", "message": "ロボットリセットが完了しました"}
