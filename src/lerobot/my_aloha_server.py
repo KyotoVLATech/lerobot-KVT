@@ -82,10 +82,10 @@ class RobotCommunicationNode:
     async def initialize_robot(self):
         try:
             config = MyAlohaConfig(
-                right_dynamixel_port="/dev/ttyUSB1",
-                right_robstride_port="/dev/ttyUSB0",
-                left_robstride_port="/dev/ttyUSB2",
-                left_dynamixel_port="/dev/ttyUSB3",
+                right_dynamixel_port="/dev/ttyUSB0",
+                right_robstride_port="/dev/ttyUSB2",
+                left_robstride_port="/dev/ttyUSB3",
+                left_dynamixel_port="/dev/ttyUSB1",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
                 max_relative_target_3=0.01, # pitch
@@ -276,6 +276,14 @@ class RobotCommunicationNode:
         """記録関連のリソースを完全にクリーンアップ"""
         # まず記録を停止
         await self.stop_recording()
+        
+        # データセットのバッファをフラッシュして完全に書き込む
+        if self.current_dataset:
+            try:
+                self.current_dataset.finalize()
+                print("データセットを正常に終了しました")
+            except Exception as e:
+                print(f"データセット終了エラー: {e}")
         
         # VideoEncodingManagerを終了
         if self.video_encoding_manager:
@@ -644,6 +652,11 @@ class RobotCommunicationNode:
         print("WebSocket接続クリーンアップ完了")
 
     async def cleanup(self):
+        # 記録中または準備中の場合、データセットを正常に終了
+        if self.is_recording or self.recording_ready or self.current_dataset is not None:
+            print("記録中のデータセットを終了します...")
+            await self._full_cleanup_recording()
+        
         await self.cleanup_connection()
         if self.robot_connected and self.robot:
             try:

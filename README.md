@@ -30,3 +30,25 @@ uv run lerobot-find-cameras realsense
 ```bash
 uv run src/lerobot/my_aloha_server.py
 ```
+- データセットのマージ
+```bash
+uv run merge_dataset_v30.py
+```
+- train
+```bash
+export DATASET_NAME=merged-aloha-dataset
+export POLICY=act
+uv run lerobot-train \
+  --dataset.repo_id=local/${DATASET_NAME} \
+  --dataset.root=datasets/${DATASET_NAME} \
+  --policy.type=$POLICY \
+  --output_dir=outputs/train/${POLICY}-${DATASET_NAME} \
+  --job_name=${POLICY}-${DATASET_NAME} \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --wandb.enable=true \
+  --wandb.disable_artifact=true \
+  --batch_size=8 \
+  --num_workers=1 \
+  --steps=500000
+```
