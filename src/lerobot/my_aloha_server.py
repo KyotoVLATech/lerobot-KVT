@@ -14,19 +14,14 @@ from lerobot.robots.my_aloha import MyAloha, MyAlohaConfig, JOINT_NAMES
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import build_dataset_frame
 from lerobot.datasets.video_utils import VideoEncodingManager
-# from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.cameras import make_cameras_from_configs
-# from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
-# from lerobot.datasets.utils import combine_feature_dicts
-# from lerobot.processor import make_default_processors
 
 class RobotCommunicationNode:
     # データセット設定
     DATASET_ROOT = Path("datasets")
     DATASET_FPS = 30
     EPISODE_MAX_TIME_S = 180
-    
     # カメラ設定
     CAMERA_CONFIGS = {
         "cam_high": {"serial_number_or_name": "029522250086", "width": 640, "height": 480, "fps": 30},
@@ -43,18 +38,13 @@ class RobotCommunicationNode:
         self.stop_threads = False
         self.robot: Optional[MyAloha] = None
         self.robot_connected = False
-        # 非同期ロボット制御用
         self.robot_control_task: Optional[asyncio.Task] = None
-        # 非同期同期プリミティブ
         self.stop_event = asyncio.Event()  # タスク停止用Event
         self.robot_lock = asyncio.Lock()  # ロボット制御排他用Lock
         self.reset_in_progress = asyncio.Event()  # リセット処理中フラグ
-        # UDP受信スレッドとの通信用（スレッドセーフ）
         self.latest_action = None
         self.action_lock = threading.Lock()  # UDP受信スレッド用
         self.control_frequency = 60 # Hz
-        
-        # データセット記録用
         self.is_recording = False
         self.recording_ready = False  # 記録準備完了フラグ
         self.current_dataset: Optional[LeRobotDataset] = None
@@ -67,7 +57,6 @@ class RobotCommunicationNode:
         """既存のデータセット番号を確認し、次の番号を返す"""
         if not self.DATASET_ROOT.exists():
             return 0
-        
         existing_nums = []
         for path in self.DATASET_ROOT.iterdir():
             if path.is_dir() and path.name.startswith("aloha-dataset-"):
@@ -76,7 +65,6 @@ class RobotCommunicationNode:
                     existing_nums.append(num)
                 except ValueError:
                     continue
-        
         return max(existing_nums) + 1 if existing_nums else 0
 
     async def initialize_robot(self):
@@ -109,9 +97,7 @@ class RobotCommunicationNode:
         try:
             camera_configs = {}
             for name, config_dict in self.CAMERA_CONFIGS.items():
-                # camera_configs[name] = OpenCVCameraConfig(**config_dict)
                 camera_configs[name] = RealSenseCameraConfig(**config_dict)
-            
             cameras = make_cameras_from_configs(camera_configs)
             for name, camera in cameras.items():
                 print(f"{name} を接続中...")
@@ -130,31 +116,21 @@ class RobotCommunicationNode:
                 response = {"status": "recording_error", "message": "既に記録中です"}
                 await websocket.send(json.dumps(response))
                 return
-            
             if not self.robot_connected:
                 response = {"status": "recording_error", "message": "ロボットが接続されていません"}
                 await websocket.send(json.dumps(response))
                 return
-            
-            # カメラを初期化
             self.cameras = self._initialize_cameras()
             if not self.cameras:
                 response = {"status": "recording_error", "message": "カメラの初期化に失敗しました"}
                 await websocket.send(json.dumps(response))
                 return
-            
-            # ロボットにカメラを設定
             self.robot.cameras = self.cameras
-            
-            # データセット番号を取得
             dataset_num = self._get_next_dataset_number()
             dataset_name = f"aloha-dataset-{dataset_num}"
             repo_id = f"local/{dataset_name}"
             dataset_path = self.DATASET_ROOT / dataset_name
-            
             print(f"データセットを作成中: {repo_id}")
-            
-            # データセットfeatureを作成
             dataset_features = {
                 "observation.state": {"dtype": "float32", "shape": (14,), "names": JOINT_NAMES},
                 "action": {"dtype": "float32", "shape": (14,), "names": JOINT_NAMES},
@@ -165,7 +141,6 @@ class RobotCommunicationNode:
                     "shape": (480, 640, 3),
                     "names": ("height", "width", "channels")
                 }
-            # データセットを作成
             self.current_dataset = LeRobotDataset.create(
                 repo_id,
                 self.DATASET_FPS,
@@ -175,22 +150,15 @@ class RobotCommunicationNode:
                 use_videos=True,
                 image_writer_processes=0,
                 image_writer_threads=4 * len(self.cameras),
+                video_backend="pyav",  # torchcodecのAV1デコード問題を回避
             )
-            
-            # VideoEncodingManagerを開始
             self.video_encoding_manager = VideoEncodingManager(self.current_dataset)
             self.video_encoding_manager.__enter__()
-            
             print(f"データセット作成完了: {repo_id}")
-            
-            # 記録準備完了（実際の記録開始はrobot_control_workerで初回アクション受信後）
             self.recording_ready = True
             self.recording_task = asyncio.create_task(self.record_episode())
-            
             response = {"status": "recording_ready", "message": f"記録準備完了: {dataset_name}。初回アクション受信後に記録を開始します"}
-            # この値に応じてUnity側でボタンの色を変化させる
             await websocket.send(json.dumps(response))
-            
         except Exception as e:
             print(f"記録開始エラー: {e}")
             import traceback
@@ -215,22 +183,14 @@ class RobotCommunicationNode:
         """エピソードを保存（データセットとリソースは保持）"""
         try:
             await self.stop_recording()
-            
             if self.current_dataset is None:
                 response = {"status": "save_error", "message": "データセットが存在しません"}
                 await websocket.send(json.dumps(response))
                 return
-            
-            print("エピソードを保存中...")
             self.current_dataset.save_episode()
             print("エピソード保存完了")
-            
-            # データセットとリソースは保持（次のエピソードのため）
-            # recording_readyは維持して、リセット後の次の記録に備える
-            
             response = {"status": "save_complete", "message": "エピソードを保存しました。次のエピソードの準備ができています"}
             await websocket.send(json.dumps(response))
-            
         except Exception as e:
             print(f"エピソード保存エラー: {e}")
             import traceback
@@ -242,22 +202,14 @@ class RobotCommunicationNode:
         """エピソードを破棄（データセットとリソースは保持）"""
         try:
             await self.stop_recording()
-            
             if self.current_dataset is None:
                 response = {"status": "discard_error", "message": "データセットが存在しません"}
                 await websocket.send(json.dumps(response))
                 return
-            
-            print("エピソードを破棄中...")
             self.current_dataset.clear_episode_buffer()
             print("エピソード破棄完了")
-            
-            # データセットとリソースは保持（次のエピソードのため）
-            # recording_readyは維持して、リセット後の次の記録に備える
-            
             response = {"status": "discard_complete", "message": "エピソードを破棄しました。次のエピソードの準備ができています"}
             await websocket.send(json.dumps(response))
-            
         except Exception as e:
             print(f"エピソード破棄エラー: {e}")
             import traceback
@@ -268,103 +220,71 @@ class RobotCommunicationNode:
     async def _prepare_next_episode(self):
         """次のエピソード記録の準備"""
         if self.recording_ready and self.current_dataset is not None:
-            # 新しい記録タスクを開始
             self.recording_task = asyncio.create_task(self.record_episode())
             print("次のエピソードの記録準備完了")
 
     async def _full_cleanup_recording(self):
         """記録関連のリソースを完全にクリーンアップ"""
-        # まず記録を停止
         await self.stop_recording()
-        
-        # データセットのバッファをフラッシュして完全に書き込む
         if self.current_dataset:
             try:
                 self.current_dataset.finalize()
-                print("データセットを正常に終了しました")
             except Exception as e:
                 print(f"データセット終了エラー: {e}")
-        
-        # VideoEncodingManagerを終了
         if self.video_encoding_manager:
             try:
                 self.video_encoding_manager.__exit__(None, None, None)
             except Exception as e:
                 print(f"VideoEncodingManager終了エラー: {e}")
             self.video_encoding_manager = None
-        
-        # カメラを閉じる
         for camera in self.cameras.values():
             try:
                 camera.disconnect()
             except Exception as e:
                 print(f"カメラ切断エラー: {e}")
         self.cameras = {}
-        
-        # ロボットのカメラ参照をクリア
         if self.robot:
             self.robot.cameras = {}
-        
         self.current_dataset = None
         self.recording_start_time = None
         self.recording_ready = False
-        print("記録リソースを完全にクリーンアップしました")
 
     async def record_episode(self):
         """30FPSで画像と関節角度を記録"""
         print("エピソード記録ループ準備完了。初回アクション受信待機中...")
         frame_count = 0
-        
-        # is_recordingがTrueになるまで待機（robot_control_workerで設定される）
         while not self.is_recording and self.recording_ready:
             await asyncio.sleep(0.01)
-        
         if not self.is_recording:
             print("記録がキャンセルされました")
             return
-        
         print("記録開始！")
-        
         try:
             while self.is_recording:
                 start_time = time.perf_counter()
-                
-                # 観測データを取得（カメラ画像 + 関節角度）
                 obs = self.robot.get_observation()
-                
-                # 行動データを取得
                 action_data = {}
                 for name in JOINT_NAMES:
                     action_data[name] = obs[name]
-                
-                # データセットフレームを構築
                 observation_frame = build_dataset_frame(
                     self.current_dataset.features, obs, prefix="observation"
                 )
                 action_frame = build_dataset_frame(
                     self.current_dataset.features, action_data, prefix="action"
                 )
-                
-                # フレームを追加
                 frame = {**observation_frame, **action_frame, "task": "do something"}
                 self.current_dataset.add_frame(frame)
-                
                 frame_count += 1
                 if frame_count % 30 == 0:
                     elapsed_time = time.time() - self.recording_start_time
                     print(f"記録中... {frame_count}フレーム ({elapsed_time:.1f}秒)")
-                
-                # 最大時間チェック
                 if time.time() - self.recording_start_time >= self.EPISODE_MAX_TIME_S:
                     print(f"最大記録時間({self.EPISODE_MAX_TIME_S}秒)に達しました")
                     break
-                
-                # 30FPSを維持
                 elapsed = time.perf_counter() - start_time
                 sleep_duration = 1.0 / self.DATASET_FPS - elapsed
                 if sleep_duration > 0:
                     await asyncio.sleep(sleep_duration)
-                    
         except asyncio.CancelledError:
             print("記録ループがキャンセルされました")
         except Exception as e:
@@ -388,7 +308,6 @@ class RobotCommunicationNode:
             self.is_connected = True
             self.start_udp_communication()
             await asyncio.sleep(0.5)
-            # 接続確認レスポンスを送信
             response = {"status": "connected", "message": "接続情報受信完了"}
             await websocket.send(json.dumps(response))
             await self.handle_websocket_messages(websocket)
@@ -423,7 +342,6 @@ class RobotCommunicationNode:
                         await self.start_recording(websocket)
                     elif command == 'teleoperation':
                         print("teleoperation要求を受信しました")
-                        # 記録中または記録準備中であれば完全にクリーンアップ
                         if self.is_recording or self.recording_ready:
                             await self._full_cleanup_recording()
                             print("記録を停止し、テレオペレーションモードに切り替えました")
@@ -449,7 +367,6 @@ class RobotCommunicationNode:
                 response = {"status": "reset_error", "message": "ロボットが接続されていません"}
                 await websocket.send(json.dumps(response))
                 return
-            # リセット処理中フラグを設定
             self.reset_in_progress.set()
             async with self.robot_lock:  # ロボット制御を排他制御
                 try:
@@ -485,7 +402,6 @@ class RobotCommunicationNode:
                             self.joint_thread.daemon = True
                             self.joint_thread.start()
                         await self.start_robot_control_task()
-                    # 記録モードの場合、次のエピソードの準備
                     if self.recording_ready and not self.is_recording:
                         await self._prepare_next_episode()
                     self.reset_in_progress.clear()
@@ -507,7 +423,6 @@ class RobotCommunicationNode:
             self.joint_thread = threading.Thread(target=self.joint_receiver_thread)
             self.joint_thread.daemon = True
             self.joint_thread.start()
-            # 非同期タスクを開始するためのヘルパー
             asyncio.create_task(self.start_robot_control_task())
             print("UDP通信スレッドと非同期ロボット制御タスクを開始しました")
 
@@ -526,29 +441,21 @@ class RobotCommunicationNode:
             current_latest_action = None
             while self.robot_connected and not self.stop_threads and not self.stop_event.is_set():
                 start_time = time.perf_counter()
-                # Unity側からデータが届くまで待機
                 with self.action_lock:
                     if self.latest_action is not None:
                         current_latest_action = self.latest_action.copy()
-                
-                # データがまだ届いていない場合は待機してcontinue
                 if current_latest_action is None:
                     await asyncio.sleep(0.01)
                     continue
-                
                 if self.reset_in_progress.is_set():
                     await asyncio.sleep(0.1)
                     continue
-                
                 if first_action_time is None:
                     first_action_time = time.time()
                     print("初回アクション受信を記録しました。3秒後にuse_relativeがFalseになります。")
-                    # 記録準備が完了している場合、ここで記録を開始
                     if self.recording_ready and not self.is_recording:
                         self.is_recording = True
                         self.recording_start_time = time.time()
-                        print("データセット記録を開始しました")
-                # 初回アクション受信から3秒経過したかチェック
                 elapsed_since_first_action = time.time() - first_action_time
                 use_relative = elapsed_since_first_action < 3.0
                 async with self.robot_lock:
@@ -580,7 +487,6 @@ class RobotCommunicationNode:
                             struct.unpack('<f', data[1 + i * 4:5 + i * 4])[0] 
                             for i in range(14)
                         ]
-                        # 角度変換
                         joint_angles[0] += np.pi / 2
                         joint_angles[1] -= np.pi / 2
                         joint_angles[2] = -joint_angles[2] - np.pi / 2
@@ -593,7 +499,6 @@ class RobotCommunicationNode:
                         joint_angles[10] = -joint_angles[10]
                         joint_angles[11] = -joint_angles[11]
                         joint_angles[12] = -joint_angles[12]
-                        # print(f"受信: {joint_angles[7]}")
                         if mode == 1 and self.robot_connected:
                             with self.action_lock:
                                 self.latest_action = np.array(joint_angles, dtype=np.float32)
@@ -609,13 +514,10 @@ class RobotCommunicationNode:
 
     async def cleanup_connection(self):
         print("WebSocket接続クリーンアップ開始...")
-        # 接続状態フラグを更新
         self.is_connected = False
         self.is_receiving_joints = False
         self.stop_threads = True
         self.stop_event.set()
-        
-        # ロボット制御タスクの終了
         if self.robot_control_task and not self.robot_control_task.done():
             print("ロボット制御タスクを終了中...")
             self.robot_control_task.cancel()
@@ -624,17 +526,12 @@ class RobotCommunicationNode:
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
         self.robot_control_task = None
-        
-        # UDP受信スレッドの終了
         if self.joint_thread and self.joint_thread.is_alive():
             print("UDP受信スレッドを終了中...")
             self.joint_thread.join(timeout=2)
         self.joint_thread = None
-        
         with self.action_lock:
             self.latest_action = None
-        
-        # WebSocket切断時にロボットを初期位置に戻す
         if self.robot_connected and self.robot:
             try:
                 print("ロボットを初期位置に戻しています...")
@@ -652,11 +549,9 @@ class RobotCommunicationNode:
         print("WebSocket接続クリーンアップ完了")
 
     async def cleanup(self):
-        # 記録中または準備中の場合、データセットを正常に終了
         if self.is_recording or self.recording_ready or self.current_dataset is not None:
             print("記録中のデータセットを終了します...")
             await self._full_cleanup_recording()
-        
         await self.cleanup_connection()
         if self.robot_connected and self.robot:
             try:

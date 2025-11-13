@@ -36,11 +36,12 @@ uv run merge_dataset_v30.py
 ```
 - train
 ```bash
-export DATASET_NAME=merged-aloha-dataset
+export DATASET_NAME=aloha-dataset-1
 export POLICY=act
 uv run lerobot-train \
   --dataset.repo_id=local/${DATASET_NAME} \
   --dataset.root=datasets/${DATASET_NAME} \
+  --dataset.video_backend=pyav \
   --policy.type=$POLICY \
   --output_dir=outputs/train/${POLICY}-${DATASET_NAME} \
   --job_name=${POLICY}-${DATASET_NAME} \
@@ -49,6 +50,5 @@ uv run lerobot-train \
   --wandb.enable=true \
   --wandb.disable_artifact=true \
   --batch_size=8 \
-  --num_workers=1 \
   --steps=500000
 ```

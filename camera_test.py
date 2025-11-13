@@ -32,4 +32,4 @@ for name, camera in cameras.items():
 
 print("画像の取得に成功しました")
 for name, image in obs.items():
-    print(f"{name}: {image.shape}")
+    print(f"{name}: {image.shape}, dtype={image.dtype}")
