@@ -60,6 +60,9 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from tests.mocks.mock_robot import MockRobot
 
         return MockRobot(config)
+    elif config.type == "my_aloha":
+        from .my_aloha import MyAloha
+        return MyAloha(config)
     else:
         try:
             return cast(Robot, make_device_from_device_class(config))

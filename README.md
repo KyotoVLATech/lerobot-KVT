@@ -52,3 +52,12 @@ uv run lerobot-train \
   --batch_size=8 \
   --steps=500000
 ```
+
+- eval
+```bash
+uv run src/lerobot/my_aloha_eval.py \
+  --policy_path outputs/train/act-aloha-dataset-0/checkpoints/last/pretrained_model \
+  --dataset_path datasets/aloha-dataset-0 \
+  --episode_time_s 60 \
+  --num_episodes 1
+```
