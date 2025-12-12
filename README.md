@@ -50,14 +50,14 @@ uv run lerobot-train \
   --wandb.enable=true \
   --wandb.disable_artifact=true \
   --batch_size=8 \
-  --steps=500000
+  --steps=200000
 ```
 
 - eval
 ```bash
 uv run src/lerobot/my_aloha_eval.py \
-  --policy_path outputs/train/act-aloha-dataset-0/checkpoints/last/pretrained_model \
-  --dataset_path datasets/aloha-dataset-0 \
-  --episode_time_s 60 \
+  --policy_path outputs/train/act-kitcut-dataset/checkpoints/200000/pretrained_model \
+  --dataset_path datasets/kitcut-dataset \
+  --episode_time_s 45 \
   --num_episodes 1
 ```

@@ -24,6 +24,6 @@ def main(cfg: MergeConfig) -> None:
 
 if __name__ == "__main__":
     main(MergeConfig(
-        name_list=["aloha-dataset-1", "aloha-dataset-2"],
-        merged_name="merged-aloha-dataset"
+        name_list=["kitcut_1ep","kitcut_2ep","kitcut_8ep","kitcut_11ep","kitcut_32ep","kitcut_46ep"],
+        merged_name="kitcut-dataset"
     ))

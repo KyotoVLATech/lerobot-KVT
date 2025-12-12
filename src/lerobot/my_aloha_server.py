@@ -80,8 +80,8 @@ class RobotCommunicationNode:
                 max_relative_target_4=0.03, # yaw
                 max_relative_target_5=0.01, # pitch
                 max_relative_target_6=0.03, # yaw
-                current_limit_gripper_R=0.5,
-                current_limit_gripper_L=0.5,
+                current_limit_gripper_R=0.3,
+                current_limit_gripper_L=0.3,
             )
             self.robot = MyAloha(config, debug=False)
             await self.robot.connect()

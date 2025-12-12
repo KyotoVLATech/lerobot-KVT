@@ -41,7 +41,7 @@ CAMERA_CONFIGS = {
 }
 
 
-async def reset_robot_to_home(robot: MyAloha):
+async def reset_robot_to_home(robot: MyAloha, init=True):
     """
     ロボットを初期位置に戻す（my_aloha_server.pyのhandle_reset_requestと同じロジック）
     """
@@ -49,6 +49,15 @@ async def reset_robot_to_home(robot: MyAloha):
     
     # 1. グリッパーを開く（0.0に設定）
     home_action = robot.old_action.copy()
+    if not init:
+        home_action[0] = 0.0
+        home_action[7] = 0.0
+        home_action[1] = -np.pi / 6
+        home_action[2] = -np.pi / 6
+        home_action[8] = -np.pi / 6
+        home_action[9] = -np.pi / 6
+        await robot.async_send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
+        await asyncio.sleep(1.0)
     home_action[3:7] = 0.0   # 左グリッパー関連
     home_action[10:14] = 0.0  # 右グリッパー関連
     await robot.async_send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
@@ -74,7 +83,7 @@ def initialize_cameras() -> dict:
         for name, camera in cameras.items():
             print(f"{name} を接続中...")
             camera.connect(warmup=True)
-            time.sleep(1.0)
+            time.sleep(0.2)
         
         print(f"{len(cameras)}台のカメラを初期化しました")
         return cameras
@@ -217,18 +226,18 @@ async def main(args):
     print("=" * 60)
     print("ロボットを初期化中...")
     config = MyAlohaConfig(
-        right_dynamixel_port="/dev/ttyUSB0",
-        right_robstride_port="/dev/ttyUSB2",
-        left_robstride_port="/dev/ttyUSB3",
-        left_dynamixel_port="/dev/ttyUSB1",
+        right_dynamixel_port="/dev/ttyUSB1",
+        right_robstride_port="/dev/ttyUSB0",
+        left_robstride_port="/dev/ttyUSB2",
+        left_dynamixel_port="/dev/ttyUSB3",
         max_relative_target_1=0.03,
         max_relative_target_2=0.01,
         max_relative_target_3=0.01,
         max_relative_target_4=0.03,
         max_relative_target_5=0.01,
         max_relative_target_6=0.03,
-        current_limit_gripper_R=0.5,
-        current_limit_gripper_L=0.5,
+        current_limit_gripper_R=0.3,
+        current_limit_gripper_L=0.3,
     )
     robot = MyAloha(config, debug=False)
     await robot.connect()
@@ -359,7 +368,7 @@ async def main(args):
             # 次のエピソードのためにロボットを初期位置に戻す
             if episode_idx < args.num_episodes - 1:
                 print(f"\n次のエピソードのためにロボットをリセットします...")
-                await reset_robot_to_home(robot)
+                await reset_robot_to_home(robot, init=False)
                 await asyncio.sleep(2.0)  # リセット後の待機時間
     
     except KeyboardInterrupt:
@@ -391,7 +400,7 @@ async def main(args):
                 print(f"{name} 切断エラー: {e}")
         
         # ロボットを初期位置に戻して切断
-        await reset_robot_to_home(robot)
+        await reset_robot_to_home(robot, init=False)
         await robot.disconnect()
         print("ロボット切断完了")
         
