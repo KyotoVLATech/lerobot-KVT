@@ -36,6 +36,7 @@ from torchvision.ops.misc import FrozenBatchNorm2d
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
+from lerobot.policies.act.flex import FlexVLA
 
 
 class ACTPolicy(PreTrainedPolicy):
@@ -321,15 +322,27 @@ class ACT(nn.Module):
 
         # Backbone for image feature extraction.
         if self.config.image_features:
-            backbone_model = getattr(torchvision.models, config.vision_backbone)(
-                replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
-                weights=config.pretrained_backbone_weights,
-                norm_layer=FrozenBatchNorm2d,
-            )
-            # Note: The assumption here is that we are using a ResNet model (and hence layer4 is the final
-            # feature map).
-            # Note: The forward method of this returns a dict: {"feature_map": output}.
-            self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
+            if self.config.vision_backbone == "flex":
+                # Initialize FlexVLA
+                # Use config.image_features to determine number of cameras.
+                # image_features is a property of PreTrainedConfig that returns a dict of image keys.
+                num_cameras = len(config.image_features)
+                
+                self.backbone = FlexVLA(
+                    num_cameras=num_cameras,
+                    d_llm=config.dim_model,
+                    # Other params can be added to Config if needed, using defaults for now
+                )
+            else:
+                backbone_model = getattr(torchvision.models, config.vision_backbone)(
+                    replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
+                    weights=config.pretrained_backbone_weights,
+                    norm_layer=FrozenBatchNorm2d,
+                )
+                # Note: The assumption here is that we are using a ResNet model (and hence layer4 is the final
+                # feature map).
+                # Note: The forward method of this returns a dict: {"feature_map": output}.
+                self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
 
         # Transformer (acts as VAE decoder when training with the variational objective).
         self.encoder = ACTEncoder(config)
@@ -346,7 +359,7 @@ class ACT(nn.Module):
                 self.config.env_state_feature.shape[0], config.dim_model
             )
         self.encoder_latent_input_proj = nn.Linear(config.latent_dim, config.dim_model)
-        if self.config.image_features:
+        if self.config.image_features and self.config.vision_backbone != "flex":
             self.encoder_img_feat_input_proj = nn.Conv2d(
                 backbone_model.fc.in_features, config.dim_model, kernel_size=1
             )
@@ -357,7 +370,7 @@ class ACT(nn.Module):
         if self.config.env_state_feature:
             n_1d_tokens += 1
         self.encoder_1d_feature_pos_embed = nn.Embedding(n_1d_tokens, config.dim_model)
-        if self.config.image_features:
+        if self.config.image_features and self.config.vision_backbone != "flex":
             self.encoder_cam_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
 
         # Transformer decoder.
@@ -466,22 +479,58 @@ class ACT(nn.Module):
             encoder_in_tokens.append(self.encoder_env_state_input_proj(batch[OBS_ENV_STATE]))
 
         if self.config.image_features:
-            # For a list of images, the H and W may vary but H*W is constant.
-            # NOTE: If modifying this section, verify on MPS devices that
-            # gradients remain stable (no explosions or NaNs).
-            for img in batch[OBS_IMAGES]:
-                cam_features = self.backbone(img)["feature_map"]
-                cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
-                cam_features = self.encoder_img_feat_input_proj(cam_features)
+            if self.config.vision_backbone == "flex":
+                # FlexVLA processing
+                # Stack images: List of (B, C, H, W) -> (B, NumCams, C, H, W)
+                # ACT uses separate keys for cameras usually, batch[OBS_IMAGES] is a list of tensors.
+                # Flex expects (B, NumCams, T, C, H, W) or (B, NumCams, C, H, W).
+                
+                imgs = torch.stack(batch[OBS_IMAGES], dim=1) # (B, NumCams, 3, H, W)
+                
+                # Forward Flex
+                # Output: (B, NumSceneTokens, DimModel)
+                flex_tokens = self.backbone(imgs)
+                
+                # Rearrange to (NumSceneTokens, B, DimModel) for Transformer
+                flex_tokens = flex_tokens.permute(1, 0, 2)
+                
+                # No separate pos embed needed for Flex tokens (already baked in or not needed for scene tokens)
+                # But ACT Encoder requires pos_embed argument.
+                # We can provide zero pos embed or a learnable one. 
+                # Flex "scene tokens" are queries. 
+                # Let's provide zeros for now, or maybe we should reuse the 1d pos embed logic if we want order?
+                # Actually, `encoder_in_pos_embed` length must match `encoder_in_tokens`.
+                
+                # flex_tokens is (Seq, Batch, Dim)
+                # flex_pos_embed should be (Seq, 1, Dim) to be compatible with other pos embeddings (which are (1, Dim))
+                # and allow broadcasting in Transformer.
+                
+                flex_pos_embed = torch.zeros(
+                    flex_tokens.size(0), 1, flex_tokens.size(2),
+                    device=flex_tokens.device, dtype=flex_tokens.dtype
+                )
+                
+                # Extend lists (converting tensors to list of 1-element tensors along sequence dim)
+                encoder_in_tokens.extend(list(flex_tokens))
+                encoder_in_pos_embed.extend(list(flex_pos_embed))
+                
+            else:
+                # For a list of images, the H and W may vary but H*W is constant.
+                # NOTE: If modifying this section, verify on MPS devices that
+                # gradients remain stable (no explosions or NaNs).
+                for img in batch[OBS_IMAGES]:
+                    cam_features = self.backbone(img)["feature_map"]
+                    cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
+                    cam_features = self.encoder_img_feat_input_proj(cam_features)
 
-                # Rearrange features to (sequence, batch, dim).
-                cam_features = einops.rearrange(cam_features, "b c h w -> (h w) b c")
-                cam_pos_embed = einops.rearrange(cam_pos_embed, "b c h w -> (h w) b c")
+                    # Rearrange features to (sequence, batch, dim).
+                    cam_features = einops.rearrange(cam_features, "b c h w -> (h w) b c")
+                    cam_pos_embed = einops.rearrange(cam_pos_embed, "b c h w -> (h w) b c")
 
-                # Extend immediately instead of accumulating and concatenating
-                # Convert to list to extend properly
-                encoder_in_tokens.extend(list(cam_features))
-                encoder_in_pos_embed.extend(list(cam_pos_embed))
+                    # Extend immediately instead of accumulating and concatenating
+                    # Convert to list to extend properly
+                    encoder_in_tokens.extend(list(cam_features))
+                    encoder_in_pos_embed.extend(list(cam_pos_embed))
 
         # Stack all tokens along the sequence dimension.
         encoder_in_tokens = torch.stack(encoder_in_tokens, axis=0)
