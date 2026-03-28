@@ -1,0 +1,12 @@
+[project]
+name = "kvt-aloha"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.3.3",
+    "pyserial>=3.5",
+    "dynamixel_sdk @ git+https://github.com/ROBOTIS-GIT/DynamixelSDK.git#subdirectory=python",
+    "pyserial-asyncio>=0.6",
+]
