@@ -1,7 +1,7 @@
 import asyncio
 import math
 import time
-from ..aloha_controller import AlohaArm, AlohaController
+from lerobot.robots.iloha.iloha_controller.aloha_controller import AlohaArm, AlohaController
 
 # --- 設定項目 ---
 # 各ポート名をご自身の環境に合わせて変更してください
