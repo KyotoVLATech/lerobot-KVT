@@ -17,6 +17,9 @@ from lerobot.datasets.video_utils import VideoEncodingManager
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.cameras import make_cameras_from_configs
 
+# TASK = "do something"
+TASK = "folding cloth"
+
 class RobotCommunicationNode:
     # データセット設定
     DATASET_ROOT = Path("datasets")
@@ -59,7 +62,7 @@ class RobotCommunicationNode:
             return 0
         existing_nums = []
         for path in self.DATASET_ROOT.iterdir():
-            if path.is_dir() and path.name.startswith("aloha-dataset-"):
+            if path.is_dir() and path.name.startswith("iloha-"):
                 try:
                     num = int(path.name.split("-")[-1])
                     existing_nums.append(num)
@@ -71,9 +74,9 @@ class RobotCommunicationNode:
         try:
             config = IlohaConfig(
                 right_dynamixel_port="/dev/ttyUSB0",
-                right_robstride_port="/dev/ttyUSB2",
+                right_robstride_port="/dev/ttyUSB1",
                 left_robstride_port="/dev/ttyUSB3",
-                left_dynamixel_port="/dev/ttyUSB1",
+                left_dynamixel_port="/dev/ttyUSB2",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
                 max_relative_target_3=0.01, # pitch
@@ -127,7 +130,7 @@ class RobotCommunicationNode:
                 return
             self.robot.cameras = self.cameras
             dataset_num = self._get_next_dataset_number()
-            dataset_name = f"aloha-dataset-{dataset_num}"
+            dataset_name = f"iloha-{dataset_num}"
             repo_id = f"local/{dataset_name}"
             dataset_path = self.DATASET_ROOT / dataset_name
             print(f"データセットを作成中: {repo_id}")
@@ -272,7 +275,7 @@ class RobotCommunicationNode:
                 action_frame = build_dataset_frame(
                     self.current_dataset.features, action_data, prefix="action"
                 )
-                frame = {**observation_frame, **action_frame, "task": "do something"}
+                frame = {**observation_frame, **action_frame, "task": TASK}
                 self.current_dataset.add_frame(frame)
                 frame_count += 1
                 if frame_count % 30 == 0:
@@ -581,4 +584,4 @@ if __name__ == "__main__":
     print("Unity-Iloha通信サーバーを起動します...")
     asyncio.run(node.start_server())
 
-# uv run src/lerobot/my_aloha_server.py
+# uv run iloha_server.py
