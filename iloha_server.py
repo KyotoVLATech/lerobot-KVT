@@ -25,6 +25,7 @@ class RobotCommunicationNode:
     DATASET_ROOT = Path("datasets")
     DATASET_FPS = 30
     EPISODE_MAX_TIME_S = 180
+    CAMERA_MAX_FRAME_AGE_MS = 250
     # カメラ設定
     CAMERA_CONFIGS = {
         "cam_high": {"serial_number_or_name": "029522250086", "width": 640, "height": 480, "fps": 30},
@@ -73,10 +74,10 @@ class RobotCommunicationNode:
     async def initialize_robot(self):
         try:
             config = IlohaConfig(
-                right_dynamixel_port="/dev/ttyUSB0",
-                right_robstride_port="/dev/ttyUSB1",
-                left_robstride_port="/dev/ttyUSB3",
-                left_dynamixel_port="/dev/ttyUSB2",
+                left_dynamixel_port="/dev/ttyUSB3",
+                left_robstride_port="/dev/ttyUSB2",
+                right_robstride_port="/dev/ttyUSB0",
+                right_dynamixel_port="/dev/ttyUSB1",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
                 max_relative_target_3=0.01, # pitch
@@ -152,7 +153,8 @@ class RobotCommunicationNode:
                 features=dataset_features,
                 use_videos=True,
                 image_writer_processes=0,
-                image_writer_threads=4 * len(self.cameras),
+                streaming_encoding=True,
+                image_writer_threads=len(self.cameras),
                 video_backend="pyav",  # torchcodecのAV1デコード問題を回避
             )
             self.video_encoding_manager = VideoEncodingManager(self.current_dataset)
@@ -252,6 +254,39 @@ class RobotCommunicationNode:
         self.recording_start_time = None
         self.recording_ready = False
 
+    def _capture_latest_observation(self) -> dict:
+        """カメラの最新フレームを非同期制御を止めずに取得する"""
+        if self.robot is None:
+            raise RuntimeError("ロボットが初期化されていません")
+
+        obs = {}
+        joint_state = self.robot.old_action.copy()
+        for name, camera in self.cameras.items():
+            try:
+                obs[name] = camera.read_latest(max_age_ms=self.CAMERA_MAX_FRAME_AGE_MS)
+            except Exception:
+                # 最新フレームがまだ無い場合のみ、新規フレーム待ちにフォールバックする
+                obs[name] = camera.async_read(timeout_ms=self.CAMERA_MAX_FRAME_AGE_MS)
+        for i, joint_name in enumerate(JOINT_NAMES):
+            obs[joint_name] = joint_state[i]
+        return obs
+
+    def _record_frame_sync(self) -> None:
+        """1フレーム分の観測構築とデータセット書き込みをワーカースレッドで行う"""
+        if self.current_dataset is None:
+            raise RuntimeError("データセットが初期化されていません")
+
+        obs = self._capture_latest_observation()
+        action_data = {joint_name: obs[joint_name] for joint_name in JOINT_NAMES}
+        observation_frame = build_dataset_frame(
+            self.current_dataset.features, obs, prefix="observation"
+        )
+        action_frame = build_dataset_frame(
+            self.current_dataset.features, action_data, prefix="action"
+        )
+        frame = {**observation_frame, **action_frame, "task": TASK}
+        self.current_dataset.add_frame(frame)
+
     async def record_episode(self):
         """30FPSで画像と関節角度を記録"""
         print("エピソード記録ループ準備完了。初回アクション受信待機中...")
@@ -265,18 +300,7 @@ class RobotCommunicationNode:
         try:
             while self.is_recording:
                 start_time = time.perf_counter()
-                obs = self.robot.get_observation()
-                action_data = {}
-                for name in JOINT_NAMES:
-                    action_data[name] = obs[name]
-                observation_frame = build_dataset_frame(
-                    self.current_dataset.features, obs, prefix="observation"
-                )
-                action_frame = build_dataset_frame(
-                    self.current_dataset.features, action_data, prefix="action"
-                )
-                frame = {**observation_frame, **action_frame, "task": TASK}
-                self.current_dataset.add_frame(frame)
+                await asyncio.to_thread(self._record_frame_sync)
                 frame_count += 1
                 if frame_count % 30 == 0:
                     elapsed_time = time.time() - self.recording_start_time
@@ -285,6 +309,8 @@ class RobotCommunicationNode:
                     print(f"最大記録時間({self.EPISODE_MAX_TIME_S}秒)に達しました")
                     break
                 elapsed = time.perf_counter() - start_time
+                if elapsed > (1.0 / self.control_frequency):
+                    print(f"記録フレーム処理が重いです: {elapsed * 1000:.1f} ms")
                 sleep_duration = 1.0 / self.DATASET_FPS - elapsed
                 if sleep_duration > 0:
                     await asyncio.sleep(sleep_duration)

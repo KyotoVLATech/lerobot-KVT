@@ -115,21 +115,21 @@ class RobStrideController:
                 # Clear any pending data in the reader
                 # Note: StreamReader doesn't have reset_input_buffer,
                 # but we can read and discard any pending data
-                while True:
-                    try:
-                        # Try to read with a very short timeout
-                        pending = await asyncio.wait_for(
-                            self.reader.read(1024), timeout=0.001
-                        )
-                        if not pending:
-                            break
-                    except asyncio.TimeoutError:
-                        break
+                # while True:
+                #     try:
+                #         # Try to read with a very short timeout
+                #         pending = await asyncio.wait_for(
+                #             self.reader.read(1024), timeout=0.001
+                #         )
+                #         if not pending:
+                #             break
+                #     except asyncio.TimeoutError:
+                #         break
 
                 # Send the frame
                 self.writer.write(frame)
                 await self.writer.drain()
-                logger.debug(f"Sent frame: {frame.hex(' ')}")
+                # logger.debug(f"Sent frame: {frame.hex(' ')}")
 
                 # Read response with timeout
                 response = await asyncio.wait_for(
@@ -144,7 +144,7 @@ class RobStrideController:
                 return None
 
             if response and response.startswith(b'AT') and response.endswith(b'\r\n'):
-                logger.debug(f"Received valid response: {response.hex(' ')}")
+                # logger.debug(f"Received valid response: {response.hex(' ')}")
                 if len(response) == 17:
                     return response
                 else:

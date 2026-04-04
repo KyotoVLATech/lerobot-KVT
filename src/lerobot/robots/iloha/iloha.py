@@ -5,25 +5,25 @@ import asyncio
 from .iloha_controller.aloha_controller import AlohaController, AlohaArm
 
 JOINT_NAMES = [
-    "joint_L_0",
-    "joint_L_1",
-    "joint_L_2",
-    "joint_L_3",
-    "joint_L_4",
-    "joint_L_5",
-    "gripper_L",
-    "joint_R_0",
-    "joint_R_1",
-    "joint_R_2",
-    "joint_R_3",
-    "joint_R_4",
-    "joint_R_5",
-    "gripper_R",
+    "left_waist",
+    "left_shoulder",
+    "left_elbow",
+    "left_forearm_roll",
+    "left_wrist_angle",
+    "left_wrist_rotate",
+    "left_gripper",
+    "right_waist",
+    "right_shoulder",
+    "right_elbow",
+    "right_forearm_roll",
+    "right_wrist_angle",
+    "right_wrist_rotate",
+    "right_gripper",
 ]
 
 class Iloha():
     config_class = IlohaConfig
-    name = "my_aloha"
+    name = "iloha"
 
     def __init__(
         self,
