@@ -5,10 +5,10 @@ from lerobot.robots.iloha.iloha_controller.aloha_controller import AlohaArm, Alo
 
 # --- 設定項目 ---
 # 各ポート名をご自身の環境に合わせて変更してください
-RIGHT_DYNAMIXEL_PORT = "/dev/ttyUSB0"
-RIGHT_ROBSTRIDE_PORT = "/dev/ttyUSB2"
-LEFT_ROBSTRIDE_PORT = "/dev/ttyUSB3"
-LEFT_DYNAMIXEL_PORT = "/dev/ttyUSB1"
+RIGHT_DYNAMIXEL_PORT = "/dev/ttyUSB1"
+RIGHT_ROBSTRIDE_PORT = "/dev/ttyUSB0"
+LEFT_ROBSTRIDE_PORT = "/dev/ttyUSB2"
+LEFT_DYNAMIXEL_PORT = "/dev/ttyUSB3"
 # -----------------
 Freq_Hz = 60  # 制御周波数
 
@@ -68,12 +68,12 @@ async def main() -> None:
             # --- デモ2: 動作 ---
             # print("\n📍 デモ2: 動作")
                 loop_start_time = time.time()
-                noise = 3.3 * math.sin(2.0 * math.pi * 0.05 * (time.time() - start_time))
+                noise = 0.3 * math.sin(2.0 * math.pi * 0.1 * (time.time() - start_time))
                 right_arm = AlohaArm(
                     0.0,
                     -math.pi / 6,
-                    -math.pi / 6,
-                    noise,
+                    -math.pi / 6 + noise,
+                    0.0,
                     0.0,
                     0.0,
                     0.0,
@@ -81,8 +81,8 @@ async def main() -> None:
                 left_arm = AlohaArm(
                     0.0,
                     -math.pi / 6,
-                    -math.pi / 6,
-                    noise,
+                    -math.pi / 6 + noise,
+                    0.0,
                     0.0,
                     0.0,
                     0.0,

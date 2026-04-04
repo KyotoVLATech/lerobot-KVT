@@ -49,6 +49,8 @@ class RobotCommunicationNode:
         self.latest_action = None
         self.action_lock = threading.Lock()  # UDP受信スレッド用
         self.control_frequency = 60 # Hz
+        self.relative_warmup_seconds = 3.0
+        self.absolute_mode_delta_threshold = 0.2  # rad
         self.is_recording = False
         self.recording_ready = False  # 記録準備完了フラグ
         self.current_dataset: Optional[LeRobotDataset] = None
@@ -481,12 +483,23 @@ class RobotCommunicationNode:
                     continue
                 if first_action_time is None:
                     first_action_time = time.time()
-                    print("初回アクション受信を記録しました。3秒後にuse_relativeがFalseになります。")
+                    print("初回アクション受信を記録しました。安定化するまで相対制限付きで制御します。")
                     if self.recording_ready and not self.is_recording:
                         self.is_recording = True
                         self.recording_start_time = time.time()
                 elapsed_since_first_action = time.time() - first_action_time
-                use_relative = elapsed_since_first_action < 3.0
+                previous_action = self.robot.old_action.copy()
+                delta_from_previous = np.abs(current_latest_action - previous_action)
+                max_delta = float(np.max(delta_from_previous))
+                use_relative = (
+                    elapsed_since_first_action < self.relative_warmup_seconds
+                    or max_delta > self.absolute_mode_delta_threshold
+                )
+                if max_delta > self.absolute_mode_delta_threshold:
+                    print(
+                        f"急激な目標変化を検出したため、相対制限を維持します "
+                        f"(max_delta={max_delta:.3f} rad)"
+                    )
                 async with self.robot_lock:
                     if not self.reset_in_progress.is_set() and self.robot_connected:
                         await self.robot.async_send_action(current_latest_action, use_relative=use_relative, use_filter=not use_relative)

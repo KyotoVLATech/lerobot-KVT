@@ -2,6 +2,7 @@ import asyncio
 import math
 from dataclasses import dataclass
 from typing import Any, List, Optional
+import numpy as np
 
 # Dynamixel関連のインポート
 from .dynamixel.src.constants import Baudrate, ProtocolVersion
@@ -97,8 +98,8 @@ class AlohaArmController:
         """モーター設定を初期化"""
         # RobStrideのリミット設定
         robstride_limits = RobStrideLimits(
-            pp_vel_max=3.14, # PP最大速度 [rad/s]
-            pp_acc_set=3.14,  # PP加速度設定 [rad/s²]
+            pp_vel_max=np.pi, # PP最大速度 [rad/s]
+            pp_acc_set=np.pi/2,  # PP加速度設定 [rad/s²]
             pp_limit_cur=10.0,  # PP電流制限 [A]
             csp_limit_spd=1.57,  # CSP速度制限 [rad/s]
             csp_limit_cur=4.0,  # CSP電流制限 [A]
@@ -171,8 +172,7 @@ class AlohaArmController:
                 self.dynamixel_controller.__aenter__(),
             )
 
-            # RobStrideモーターをCSPモードに設定・有効化
-            # await self._setup_robstride_motors("CSP")
+            # RobStrideモーターをPPモードに設定・有効化
             await self._setup_robstride_motors("PP")
 
             # 初期位置に移動
