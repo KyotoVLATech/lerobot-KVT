@@ -6,7 +6,8 @@ RobStrideモーターの非同期制御用Pythonライブラリです。複数�
 
 - **異なるシリアルバス間の並行処理**: 複数のUSBCANアダプタを使用時に真の並行処理でスループット向上
 - **単一バス内の安全な混線防止**: `async with self.lock` によるロック機能で通信の安全性を確保
-- **効率的なI/O待機**: `await`によるCPUリソースの効率的利用
+- **ハードウェア保護 (Hardening)**: 電流制限の動的設定と、瞬断時の設定リセットを防ぐNVM保存機能
+- **高度なリアルタイム診断**: Type 2フィードバックフレームによる正確な温度・トルク・電圧の計測
 - **柔軟な制御パターン**: `asyncio.gather()`による複雑な制御シーケンスの実現
 
 ## 📋 前提条件
@@ -129,6 +130,20 @@ await controller.set_mode_current(motor_id)
 await controller.set_target_current(motor_id, current_ampere)
 ```
 
+## 🛡️ ハードウェア保護と診断機能 (Hardening & Diagnostics)
+
+大規模なシステムでの安定稼働をサポートするための機能が追加されています。
+
+### 1. 電流制限と NVM 保存 (Persistence)
+RobStrideモーターは通常、電源遮断でパラメータがリセットされますが、本ライブラリでは設定した制限値を不揮発メモリに保存できます。
+- **機能**: `LIMIT_CUR` (0x7018) を設定し、`save_parameters()` でフラッシュメモリに永続化します。
+- **メリット**: 万が一の電圧降下による再起動が発生しても、安全な電流制限がかかった状態で復帰します。
+
+### 2. リアルタイム・デジタルツイン
+`get_motor_feedback()` メソッドを使用することで、ロボットの微細な状態を把握できます。
+- **Type 2 フレーム**: 通信負荷を抑えつつ、温度・トルク・電圧を 1 パケットで取得します。
+- **自動レポート**: 通信エラー発生時に、対象モーターの末期状態（電圧、温度、エラーコード）を自動的に診断ダンプします。
+
 ## 🏃‍♂️ サンプルコードの実行
 
 ### 基本サンプル
@@ -151,6 +166,15 @@ uv run -m src.samples.velocity_sample
 # 基本的な通信テスト
 uv run connection_test.py
 ```
+
+### 診断・高度なテストツール (Added)
+`tests/` ディレクトリに格納されているメンテナンス用スクリプトです。これらはプロジェクト全体の状態確認に使用します。
+
+| スクリプト | 概要 | 実行コマンド |
+| :--- | :--- | :--- |
+| `motor_status_check.py` | 全モーターの状態、リミット設定、ゲインを一覧表示。 | `uv run -m src.lerobot.robots.iloha.iloha_controller.robstride.tests.motor_status_check /dev/ttyUSB2` |
+| `debug_read_raw.py` | 低層データの生読み出し（デコード検証用）。 | `uv run -m src.lerobot.robots.iloha.iloha_controller.robstride.tests.debug_read_raw` |
+| `test_feedback.py` | 高速フィードバック通信の負荷テスト。 | `uv run -m src.lerobot.robots.iloha.iloha_controller.robstride.tests.test_feedback` |
 
 ## 🔧 高度な使用方法
 
@@ -247,3 +271,6 @@ uv run connection_test.py
 - `async set_target_position(motor_id: int, position_rad: float) -> None`: 目標位置設定
 - `async set_target_velocity(motor_id: int, velocity: float) -> None`: 目標速度設定
 - `async set_target_current(motor_id: int, current: float) -> None`: 目標電流設定
+- `async save_parameters(motor_id: int) -> bool`: 現在の全パラメータをモーターのフラッシュメモリに保存
+- `async get_motor_feedback(motor_id: int) -> dict`: Type 2フレームによる高度なフィードバック（温度、トルク、電圧等）の取得
+- `async log_motor_diagnostics(motor_id: int, reason: str)`: 診断レポートを生成しログに出力

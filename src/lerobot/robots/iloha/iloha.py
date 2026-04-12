@@ -89,6 +89,7 @@ class Iloha():
                 self.config.left_robstride_port,
                 self.config.right_dynamixel_port,
                 self.config.left_dynamixel_port,
+                robstride_current_limit=self.config.current_limit_robstride,
             )
             # AlohaControllerを非同期で初期化
             await self.aloha.__aenter__()

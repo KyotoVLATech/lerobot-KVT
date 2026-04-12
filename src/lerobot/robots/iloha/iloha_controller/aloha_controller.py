@@ -16,6 +16,7 @@ class AlohaController:
         left_robstride_port: str,
         right_dynamixel_port: str,
         left_dynamixel_port: str,
+        robstride_current_limit: float = 2.0,
         right_robstride_constants: Optional[List[Any]] = None,
         right_dynamixel_constants: Optional[List[Any]] = None,
         left_robstride_constants: Optional[List[Any]] = None,
@@ -91,12 +92,14 @@ class AlohaController:
             "dynamixel_port": right_dynamixel_port,
             "robstride_constants": right_robstride_constants,
             "dynamixel_constants": right_dynamixel_constants,
+            "robstride_current_limit": robstride_current_limit,
         }
         self.left_params = {
             "robstride_port": left_robstride_port,
             "dynamixel_port": left_dynamixel_port,
             "robstride_constants": left_robstride_constants,
             "dynamixel_constants": left_dynamixel_constants,
+            "robstride_current_limit": robstride_current_limit,
         }
 
     async def _initialize_controllers(self) -> None:

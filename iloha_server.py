@@ -85,16 +85,17 @@ class RobotCommunicationNode:
     async def initialize_robot(self):
         try:
             config = IlohaConfig(
-                left_dynamixel_port="/dev/ttyUSB1",
+                left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
                 left_robstride_port="/dev/ttyUSB2",
                 right_robstride_port="/dev/ttyUSB3",
-                right_dynamixel_port="/dev/ttyUSB0",
+                right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
                 max_relative_target_3=0.01, # pitch
                 max_relative_target_4=0.03, # yaw
                 max_relative_target_5=0.01, # pitch
                 max_relative_target_6=0.03, # yaw
+                current_limit_robstride=8.0, # RobStride電流制限 (A)
                 current_limit_gripper_R=0.3,
                 current_limit_gripper_L=0.3,
             )

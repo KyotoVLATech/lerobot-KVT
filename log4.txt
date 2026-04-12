@@ -1,0 +1,260 @@
+Unity-Iloha通信サーバーを起動します...
+WebSocketサーバーを開始: ポート8080
+🤖 ALOHA双腕コントローラー初期化中...
+  両アーム並列初期化中...
+🔧 ALOHA Controller初期化中...
+  RobStrideコントローラー接続中...
+  Dynamixelコントローラー接続中...
+🔧 ALOHA Controller初期化中...
+  RobStrideコントローラー接続中...
+  Dynamixelコントローラー接続中...
+  RobStrideモーターセットアップ中 (PPモード)...
+  RobStrideモーターセットアップ中 (PPモード)...
+  📊 接続状況: [ ID4:OK | ID5:OK | ID6:OK ]
+  📊 接続状況: [ ID1:OK | ID2:OK | ID3:OK ]
+  初期位置へ移動中...
+  初期位置へ移動中...
+✅ ALOHA Controller初期化完了!
+✅ ALOHA Controller初期化完了!
+✅ ALOHA双腕コントローラー初期化完了!
+Ilohaロボット初期化・接続完了
+サーバー起動完了。Unityからの接続を待機中...
+WebSocket接続: ('192.168.0.137', 59408)
+Unity側からのメッセージを待機中...
+関節角度受信開始: ポート8082UDP通信スレッドと非同期ロボット制御タスクを開始しました
+新しいロボット制御タスクを開始しました
+ロボット制御ワーカー開始
+
+WebSocketメッセージ受信: {"command":"reset_robot"}
+ロボットリセット要求を受信しました
+ロボットリセット処理開始...
+制御タスク停止シグナル送信中...
+ロボット制御タスクの停止を待機中...
+ロボット制御ワーカー終了
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   4.09 ms | Max:   6.24 ms | Samples:   14
+ Motor   2 | Avg:   4.09 ms | Max:   5.73 ms | Samples:   13
+ Motor   3 | Avg:   4.04 ms | Max:   5.95 ms | Samples:   13
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   4.23 ms | Max:   6.81 ms | Samples:   14
+ Motor   5 | Avg:   4.09 ms | Max:   5.94 ms | Samples:   13
+ Motor   6 | Avg:   4.06 ms | Max:   5.93 ms | Samples:   13
+-------------------------------------------
+
+関節角度受信終了
+ホームポジション移動完了
+UDP受信スレッドとロボット制御タスクを再開中...
+UDP受信スレッドを再起動中...
+関節角度受信開始: ポート8082
+新しいロボット制御タスクを開始しました
+ロボットリセット処理完了
+ロボット制御ワーカー開始
+WebSocketメッセージ受信: {"command":"recording"}
+recording要求を受信しました
+cam_high を接続中...
+cam_left_wrist を接続中...
+cam_right_wrist を接続中...
+カメラ初期化エラー: Failed to open RealSenseCamera(146222252104).Run `lerobot-find-cameras realsense` to find available cameras.
+初回アクション受信を記録しました。安定化するまで相対制限付きで制御します。
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.29 ms | Max:   3.44 ms | Samples:    2
+ Motor   2 | Avg:   4.07 ms | Max:   4.12 ms | Samples:    2
+ Motor   3 | Avg:   3.98 ms | Max:   4.06 ms | Samples:    2
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.32 ms | Max:   3.41 ms | Samples:    2
+ Motor   5 | Avg:   4.03 ms | Max:   4.06 ms | Samples:    2
+ Motor   6 | Avg:   3.47 ms | Max:   3.88 ms | Samples:    2
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.16 ms | Max:   3.58 ms | Samples:  290
+ Motor   5 | Avg:   3.78 ms | Max:   4.26 ms | Samples:  290
+ Motor   6 | Avg:   3.83 ms | Max:   4.27 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.15 ms | Max:   3.58 ms | Samples:  290
+ Motor   2 | Avg:   3.94 ms | Max:   4.24 ms | Samples:  290
+ Motor   3 | Avg:   3.95 ms | Max:   4.28 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.16 ms | Max:   3.56 ms | Samples:  289
+ Motor   5 | Avg:   3.77 ms | Max:   4.29 ms | Samples:  290
+ Motor   6 | Avg:   3.86 ms | Max:   4.25 ms | Samples:  289
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.16 ms | Max:   3.51 ms | Samples:  289
+ Motor   2 | Avg:   3.97 ms | Max:   4.30 ms | Samples:  290
+ Motor   3 | Avg:   3.95 ms | Max:   4.39 ms | Samples:  289
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.16 ms | Max:   3.48 ms | Samples:  289
+ Motor   2 | Avg:   3.95 ms | Max:   4.25 ms | Samples:  289
+ Motor   3 | Avg:   3.94 ms | Max:   4.27 ms | Samples:  289
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.16 ms | Max:   3.54 ms | Samples:  289
+ Motor   5 | Avg:   3.82 ms | Max:   4.26 ms | Samples:  289
+ Motor   6 | Avg:   3.85 ms | Max:   4.28 ms | Samples:  289
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.06 ms | Max:   3.42 ms | Samples:  292
+ Motor   5 | Avg:   3.71 ms | Max:   4.25 ms | Samples:  291
+ Motor   6 | Avg:   3.78 ms | Max:   4.20 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.06 ms | Max:   3.51 ms | Samples:  292
+ Motor   2 | Avg:   3.90 ms | Max:   4.32 ms | Samples:  291
+ Motor   3 | Avg:   3.92 ms | Max:   4.23 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.07 ms | Max:   4.02 ms | Samples:  291
+ Motor   2 | Avg:   3.88 ms | Max:   4.18 ms | Samples:  292
+ Motor   3 | Avg:   3.90 ms | Max:   4.12 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.06 ms | Max:   3.43 ms | Samples:  291
+ Motor   5 | Avg:   3.69 ms | Max:   4.19 ms | Samples:  292
+ Motor   6 | Avg:   3.77 ms | Max:   4.19 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.03 ms | Max:   3.34 ms | Samples:  293
+ Motor   5 | Avg:   3.66 ms | Max:   4.12 ms | Samples:  292
+ Motor   6 | Avg:   3.77 ms | Max:   4.10 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.04 ms | Max:   3.41 ms | Samples:  293
+ Motor   2 | Avg:   3.88 ms | Max:   4.11 ms | Samples:  292
+ Motor   3 | Avg:   3.89 ms | Max:   4.10 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.05 ms | Max:   3.40 ms | Samples:  292
+ Motor   5 | Avg:   3.74 ms | Max:   4.11 ms | Samples:  293
+ Motor   6 | Avg:   3.77 ms | Max:   4.12 ms | Samples:  293
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.04 ms | Max:   3.38 ms | Samples:  292
+ Motor   2 | Avg:   3.89 ms | Max:   4.14 ms | Samples:  293
+ Motor   3 | Avg:   3.90 ms | Max:   4.17 ms | Samples:  293
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.10 ms | Max:   3.55 ms | Samples:  291
+ Motor   5 | Avg:   3.78 ms | Max:   4.17 ms | Samples:  291
+ Motor   6 | Avg:   3.84 ms | Max:   4.22 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.08 ms | Max:   3.50 ms | Samples:  291
+ Motor   2 | Avg:   3.92 ms | Max:   4.17 ms | Samples:  291
+ Motor   3 | Avg:   3.90 ms | Max:   4.22 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.07 ms | Max:   3.40 ms | Samples:  291
+ Motor   5 | Avg:   3.76 ms | Max:   4.17 ms | Samples:  291
+ Motor   6 | Avg:   3.78 ms | Max:   4.17 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.06 ms | Max:   3.35 ms | Samples:  292
+ Motor   2 | Avg:   3.92 ms | Max:   4.26 ms | Samples:  291
+ Motor   3 | Avg:   3.55 ms | Max:   4.13 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.05 ms | Max:   3.49 ms | Samples:  290
+ Motor   5 | Avg:   3.70 ms | Max:   4.25 ms | Samples:  289
+ Motor   6 | Avg:   3.80 ms | Max:   4.21 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.05 ms | Max:   3.46 ms | Samples:  290
+ Motor   2 | Avg:   3.90 ms | Max:   4.19 ms | Samples:  290
+ Motor   3 | Avg:   2.12 ms | Max:   2.48 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.06 ms | Max:   3.31 ms | Samples:  290
+ Motor   5 | Avg:   3.71 ms | Max:   4.12 ms | Samples:  290
+ Motor   6 | Avg:   3.76 ms | Max:   4.18 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.05 ms | Max:   3.37 ms | Samples:  290
+ Motor   2 | Avg:   3.89 ms | Max:   4.16 ms | Samples:  290
+ Motor   3 | Avg:   2.10 ms | Max:   2.37 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.05 ms | Max:   3.32 ms | Samples:  290
+ Motor   5 | Avg:   3.69 ms | Max:   4.11 ms | Samples:  290
+ Motor   6 | Avg:   3.77 ms | Max:   4.11 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.04 ms | Max:   3.36 ms | Samples:  290
+ Motor   2 | Avg:   3.89 ms | Max:   4.12 ms | Samples:  290
+ Motor   3 | Avg:   2.12 ms | Max:   2.30 ms | Samples:  290
+-------------------------------------------
+
+WebSocketメッセージ受信: {"command":"discard_data"}
+データ破棄要求を受信しました
+WebSocketメッセージ受信: {"command":"reset_robot"}
+ロボットリセット要求を受信しました
+ロボットリセット処理開始...
+制御タスク停止シグナル送信中...
+ロボット制御タスクの停止を待機中...
+ロボット制御ワーカー終了
+関節角度受信終了
+ホームポジション移動完了
+UDP受信スレッドとロボット制御タスクを再開中...
+UDP受信スレッドを再起動中...
+関節角度受信開始: ポート8082
+新しいロボット制御タスクを開始しました
+ロボットリセット処理完了
+ロボット制御ワーカー開始

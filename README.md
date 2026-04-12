@@ -8,16 +8,26 @@ uv pip uninstall torch torchvision
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 ## Usage
-- USBデバイス名の確認
+- USBデバイスの固定化 (推奨)
+再起動のたびにデバイス名 (`/dev/ttyUSBX`) が入れ替わるのを防ぐため、以下のスクリプトを実行して Dynamixel アダプタを固定名にマッピングしてください。
 ```bash
-ls /dev/ttyU*
+sudo bash scripts/setup_udev.sh
+# メニューから 1) Apply Rules を選択
 ```
-`iloha_server.py`の86行目付近を変更
+実行後、`/dev/ttyUSB_LeftDynamixel` および `/dev/ttyUSB_RightDynamixel` が作成されます。
+
+- デバイス名の確認
+```bash
+ls -l /dev/ttyUSB*
+```
+`iloha_server.py` の `initialize_robot` メソッド内（86行目付近）でポートを割り当てます。
 ```py
-right_dynamixel_port="/dev/ttyUSB0",
-right_robstride_port="/dev/ttyUSB2",
-left_robstride_port="/dev/ttyUSB3",
-left_dynamixel_port="/dev/ttyUSB1",
+# 固定名 (udev) を使用する場合の例
+left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
+right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
+# RobStride は現状通り /dev/ttyUSBx を指定
+left_robstride_port="/dev/ttyUSB2",
+right_robstride_port="/dev/ttyUSB3",
 ```
 - カメラデバイスの確認
 ```bash
