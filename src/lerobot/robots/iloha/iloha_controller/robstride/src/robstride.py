@@ -16,7 +16,7 @@ from .constants import CommandType, FaultCode, MotorStatus, ParameterIndex, RunM
 logger = getLogger(__name__)
 
 # デバッグ設定: Trueにすると各制御サイクルで電圧のみを個別に読み取り、コンソールに表示します
-DEBUG_VBUS_EVERY_CYCLE = False
+DEBUG_VBUS_EVERY_CYCLE = False  # Trueにするとサイクルごとにバス負荷が2倍になるので通常はFalse
 logger.setLevel(logging.ERROR)
 handler_format = Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 stream_handler = StreamHandler()

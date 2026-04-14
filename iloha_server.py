@@ -86,8 +86,8 @@ class RobotCommunicationNode:
         try:
             config = IlohaConfig(
                 left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
-                left_robstride_port="/dev/ttyUSB2",
-                right_robstride_port="/dev/ttyUSB3",
+                left_robstride_port="/dev/ttyUSB3",
+                right_robstride_port="/dev/ttyUSB2",
                 right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
@@ -95,7 +95,7 @@ class RobotCommunicationNode:
                 max_relative_target_4=0.03, # yaw
                 max_relative_target_5=0.01, # pitch
                 max_relative_target_6=0.03, # yaw
-                current_limit_robstride=8.0, # RobStride電流制限 (A)
+                current_limit_robstride={1: 4.0, 2: 16.0, 3: 4.0, 4: 4.0, 5: 16.0, 6: 4.0}, # ID1-6個別に設定
                 current_limit_gripper_R=0.3,
                 current_limit_gripper_L=0.3,
             )
@@ -601,6 +601,18 @@ class RobotCommunicationNode:
         self.joint_thread = None
         with self.action_lock:
             self.latest_action = None
+        # カメラリソースを解放（disconnect/reconnect時にカメラが掴まれたままになるのを防ぐ）
+        if self.cameras:
+            print("カメラリソースを解放中...")
+            for name, camera in self.cameras.items():
+                try:
+                    camera.disconnect()
+                    print(f"  {name} 切断完了")
+                except Exception as e:
+                    print(f"  {name} 切断エラー: {e}")
+            self.cameras = {}
+            if self.robot:
+                self.robot.cameras = {}
         if self.robot_connected and self.robot:
             try:
                 print("ロボットを初期位置に戻しています...")

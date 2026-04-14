@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from .aloha_arm_controller import AlohaArm, AlohaArmController
 
@@ -16,7 +16,7 @@ class AlohaController:
         left_robstride_port: str,
         right_dynamixel_port: str,
         left_dynamixel_port: str,
-        robstride_current_limit: float = 2.0,
+        robstride_current_limit: Union[float, dict[int, float]] = 2.0,
         right_robstride_constants: Optional[List[Any]] = None,
         right_dynamixel_constants: Optional[List[Any]] = None,
         left_robstride_constants: Optional[List[Any]] = None,

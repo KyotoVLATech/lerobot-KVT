@@ -1,7 +1,7 @@
 import asyncio
 import math
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 import numpy as np
 
 # Dynamixel関連のインポート
@@ -56,7 +56,7 @@ class AlohaArmController:
         dynamixel_port: str,
         robstride_constants: List[Any],
         dynamixel_constants: List[Any],
-        robstride_current_limit: float = 2.0,
+        robstride_current_limit: Union[float, dict[int, float]] = 2.0,
     ):
         """
         ALOHAコントローラーを初期化
@@ -98,30 +98,31 @@ class AlohaArmController:
 
     def _setup_motors(self) -> None:
         """モーター設定を初期化"""
-        # RobStrideのリミット設定
-        robstride_limits = RobStrideLimits(
-            pp_vel_max=np.pi, # PP最大速度 [rad/s]
-            pp_acc_set=np.pi/2,  # PP加速度設定 [rad/s²]
-            pp_limit_cur=self.robstride_current_limit,  # PP電流制限 [A]
-            csp_limit_spd=1.57,  # CSP速度制限 [rad/s]
-            csp_limit_cur=self.robstride_current_limit,  # CSP電流制限 [A]
-        )
+        def get_limits(m_id):
+            limit = self.robstride_current_limit.get(m_id, 2.0) if isinstance(self.robstride_current_limit, dict) else self.robstride_current_limit
+            return RobStrideLimits(
+                pp_vel_max=np.pi, # PP最大速度 [rad/s]
+                pp_acc_set=np.pi/2,  # PP加速度設定 [rad/s²]
+                pp_limit_cur=limit,  # PP電流制限 [A]
+                csp_limit_spd=1.57,  # CSP速度制限 [rad/s]
+                csp_limit_cur=limit,  # CSP電流制限 [A]
+            )
 
         self.robstride_motors = [
             RobStride(
                 id=self.robstride01_constants.ID,
                 offset=self.robstride01_constants.DEFAULT_OFFSET,
-                limits=robstride_limits,
+                limits=get_limits(self.robstride01_constants.ID),
             ),
             RobStride(
                 id=self.robstride02_constants.ID,
                 offset=self.robstride02_constants.DEFAULT_OFFSET,
-                limits=robstride_limits,
+                limits=get_limits(self.robstride02_constants.ID),
             ),
             RobStride(
                 id=self.robstride03_constants.ID,
                 offset=self.robstride03_constants.DEFAULT_OFFSET,
-                limits=robstride_limits,
+                limits=get_limits(self.robstride03_constants.ID),
             ),
         ]
 
