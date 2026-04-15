@@ -265,7 +265,7 @@ def _resolve_labels_csv(cfg: RECAPPiStarTrainingConfig) -> Path:
 
     from lerobot.datasets.lerobot_dataset import HF_LEROBOT_HOME
 
-    dataset_root = Path(cfg.root) / cfg.repo_id if cfg.root else HF_LEROBOT_HOME / cfg.repo_id
+    dataset_root = Path(cfg.root) if cfg.root else HF_LEROBOT_HOME / cfg.repo_id
     default_path = dataset_root / "meta" / "episode_labels.csv"
     if default_path.is_file():
         return default_path

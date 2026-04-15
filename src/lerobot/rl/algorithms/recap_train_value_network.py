@@ -240,7 +240,7 @@ def _resolve_labels_csv_path(cfg: RECAPValueTrainingConfig) -> Path:
             raise FileNotFoundError(f"Provided --labels_csv_path does not exist: {resolved}")
         return resolved
 
-    dataset_root = Path(cfg.root) / cfg.repo_id if cfg.root else HF_LEROBOT_HOME / cfg.repo_id
+    dataset_root = Path(cfg.root) if cfg.root else HF_LEROBOT_HOME / cfg.repo_id
     default_path = dataset_root / DEFAULT_EPISODE_LABELS_FILENAME
     if default_path.is_file():
         return default_path
