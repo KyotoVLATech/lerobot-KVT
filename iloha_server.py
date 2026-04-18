@@ -10,12 +10,13 @@ import numpy as np
 from typing import Optional
 import time
 from pathlib import Path
-from lerobot.robots.iloha import Iloha, IlohaConfig, JOINT_NAMES
+from lerobot.robots.iloha import Iloha, IlohaConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import build_dataset_frame
 from lerobot.datasets.video_utils import VideoEncodingManager
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.cameras import make_cameras_from_configs
+from iloha_mapping import JOINT_NAMES, iloha_to_aloha
 
 # TASK = "do something"
 TASK = "Grab the edge of the towel and fold it twice."
@@ -289,7 +290,7 @@ class RobotCommunicationNode:
             raise RuntimeError("ロボットが初期化されていません")
 
         obs = {}
-        joint_state = self.robot.old_action.copy()
+        joint_state = iloha_to_aloha(self.robot.old_action)
         for name, camera in self.cameras.items():
             try:
                 obs[name] = camera.read_latest(max_age_ms=self.CAMERA_MAX_FRAME_AGE_MS)
