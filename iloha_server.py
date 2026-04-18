@@ -18,7 +18,7 @@ from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraCon
 from lerobot.cameras import make_cameras_from_configs
 
 # TASK = "do something"
-TASK = "folding cloth"
+TASK = "Grab the edge of the towel and fold it twice."
 
 class RobotCommunicationNode:
     # データセット設定
