@@ -59,6 +59,15 @@ class RobotCommunicationNode:
         self.cameras: dict = {}
         self.video_encoding_manager: Optional[VideoEncodingManager] = None
 
+    def _get_buffered_frame_count(self) -> int:
+        """現在のエピソードバッファに積まれているフレーム数を返す"""
+        if self.current_dataset is None:
+            return 0
+        episode_buffer = getattr(self.current_dataset, "episode_buffer", None)
+        if episode_buffer is None:
+            return 0
+        return int(episode_buffer.get("size", 0))
+
     def _get_next_dataset_number(self) -> int:
         """既存のデータセット番号を確認し、次の番号を返す"""
         if not self.DATASET_ROOT.exists():
@@ -76,16 +85,17 @@ class RobotCommunicationNode:
     async def initialize_robot(self):
         try:
             config = IlohaConfig(
-                left_dynamixel_port="/dev/ttyUSB3",
-                left_robstride_port="/dev/ttyUSB2",
-                right_robstride_port="/dev/ttyUSB0",
-                right_dynamixel_port="/dev/ttyUSB1",
+                left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
+                left_robstride_port="/dev/ttyUSB3",
+                right_robstride_port="/dev/ttyUSB2",
+                right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
                 max_relative_target_3=0.01, # pitch
                 max_relative_target_4=0.03, # yaw
                 max_relative_target_5=0.01, # pitch
                 max_relative_target_6=0.03, # yaw
+                current_limit_robstride={1: 4.0, 2: 16.0, 3: 4.0, 4: 4.0, 5: 16.0, 6: 4.0}, # ID1-6個別に設定
                 current_limit_gripper_R=0.3,
                 current_limit_gripper_L=0.3,
             )
@@ -194,7 +204,18 @@ class RobotCommunicationNode:
                 response = {"status": "save_error", "message": "データセットが存在しません"}
                 await websocket.send(json.dumps(response))
                 return
+            if self._get_buffered_frame_count() == 0:
+                if getattr(self.current_dataset, "episode_buffer", None) is not None:
+                    self.current_dataset.clear_episode_buffer()
+                await self._prepare_next_episode()
+                response = {
+                    "status": "save_skipped",
+                    "message": "保存対象のフレームがまだありません。初回アクション受信後に記録が始まります。",
+                }
+                await websocket.send(json.dumps(response))
+                return
             self.current_dataset.save_episode()
+            await self._prepare_next_episode()
             print("エピソード保存完了")
             response = {"status": "save_complete", "message": "エピソードを保存しました。次のエピソードの準備ができています"}
             await websocket.send(json.dumps(response))
@@ -213,7 +234,9 @@ class RobotCommunicationNode:
                 response = {"status": "discard_error", "message": "データセットが存在しません"}
                 await websocket.send(json.dumps(response))
                 return
-            self.current_dataset.clear_episode_buffer()
+            if getattr(self.current_dataset, "episode_buffer", None) is not None:
+                self.current_dataset.clear_episode_buffer()
+            await self._prepare_next_episode()
             print("エピソード破棄完了")
             response = {"status": "discard_complete", "message": "エピソードを破棄しました。次のエピソードの準備ができています"}
             await websocket.send(json.dumps(response))
@@ -226,7 +249,11 @@ class RobotCommunicationNode:
 
     async def _prepare_next_episode(self):
         """次のエピソード記録の準備"""
-        if self.recording_ready and self.current_dataset is not None:
+        if (
+            self.recording_ready
+            and self.current_dataset is not None
+            and (self.recording_task is None or self.recording_task.done())
+        ):
             self.recording_task = asyncio.create_task(self.record_episode())
             print("次のエピソードの記録準備完了")
 
@@ -495,11 +522,11 @@ class RobotCommunicationNode:
                     elapsed_since_first_action < self.relative_warmup_seconds
                     or max_delta > self.absolute_mode_delta_threshold
                 )
-                if max_delta > self.absolute_mode_delta_threshold:
-                    print(
-                        f"急激な目標変化を検出したため、相対制限を維持します "
-                        f"(max_delta={max_delta:.3f} rad)"
-                    )
+                # if max_delta > self.absolute_mode_delta_threshold:
+                    # print(
+                    #     f"急激な目標変化を検出したため、相対制限を維持します "
+                    #     f"(max_delta={max_delta:.3f} rad)"
+                    # )
                 async with self.robot_lock:
                     if not self.reset_in_progress.is_set() and self.robot_connected:
                         await self.robot.async_send_action(current_latest_action, use_relative=use_relative, use_filter=not use_relative)
@@ -574,6 +601,18 @@ class RobotCommunicationNode:
         self.joint_thread = None
         with self.action_lock:
             self.latest_action = None
+        # カメラリソースを解放（disconnect/reconnect時にカメラが掴まれたままになるのを防ぐ）
+        if self.cameras:
+            print("カメラリソースを解放中...")
+            for name, camera in self.cameras.items():
+                try:
+                    camera.disconnect()
+                    print(f"  {name} 切断完了")
+                except Exception as e:
+                    print(f"  {name} 切断エラー: {e}")
+            self.cameras = {}
+            if self.robot:
+                self.robot.cameras = {}
         if self.robot_connected and self.robot:
             try:
                 print("ロボットを初期位置に戻しています...")
