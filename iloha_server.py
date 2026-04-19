@@ -27,9 +27,10 @@ class RobotCommunicationNode:
     DATASET_FPS = 30
     EPISODE_MAX_TIME_S = 180
     CAMERA_MAX_FRAME_AGE_MS = 250
+    CAM_HIGH_CROP_SIZE = (480, 640)  # height, width
     # カメラ設定
     CAMERA_CONFIGS = {
-        "cam_high": {"serial_number_or_name": "029522250086", "width": 640, "height": 480, "fps": 30},
+        "cam_high": {"serial_number_or_name": "029522250086", "width": 1280, "height": 720, "fps": 30},
         "cam_left_wrist": {"serial_number_or_name": "341522301205", "width": 640, "height": 480, "fps": 30},
         "cam_right_wrist": {"serial_number_or_name": "146222252104", "width": 640, "height": 480, "fps": 30}
     }
@@ -301,12 +302,26 @@ class RobotCommunicationNode:
             obs[joint_name] = joint_state[i]
         return obs
 
+    def _crop_cam_high_for_dataset(self, image: np.ndarray) -> np.ndarray:
+        """cam_highの中央下部640x480をLeRobotDataset保存用に切り出す"""
+        crop_h, crop_w = self.CAM_HIGH_CROP_SIZE
+        height, width = image.shape[:2]
+        if height < crop_h or width < crop_w:
+            raise ValueError(
+                f"cam_high image is too small for {crop_w}x{crop_h} crop: "
+                f"got {width}x{height}"
+            )
+        top = height - crop_h
+        left = (width - crop_w) // 2
+        return np.ascontiguousarray(image[top:top + crop_h, left:left + crop_w])
+
     def _record_frame_sync(self) -> None:
         """1フレーム分の観測構築とデータセット書き込みをワーカースレッドで行う"""
         if self.current_dataset is None:
             raise RuntimeError("データセットが初期化されていません")
 
         obs = self._capture_latest_observation()
+        obs["cam_high"] = self._crop_cam_high_for_dataset(obs["cam_high"])
         action_data = {joint_name: obs[joint_name] for joint_name in JOINT_NAMES}
         observation_frame = build_dataset_frame(
             self.current_dataset.features, obs, prefix="observation"

@@ -33,20 +33,20 @@ ALOHA_OFFSET = np.array(
 )
 ALOHA_FROM_ILOHA_SCALE = np.array(
     [
-        -1.0,
-        -1.0,
-        1.0,
-        -1.0,
-        1.0,
-        -1.0,
-        -1.0,
-        -1.0,
-        -1.0,
-        1.0,
-        -1.0,
-        1.0,
-        -1.0,
-        -1.0,
+        -1.0, # left_waist/joint_0
+        -1.0, # left_shoulder/joint_1
+        1.0,  # left_elbow/joint_2
+        -1.0, # left_forearm_roll/joint_3
+        1.0,  # left_wrist_angle/joint_4
+        -1.0, # left_wrist_rotate/joint_5
+        -1.0, # left_gripper/joint_6
+        -1.0, # right_waist/joint_7
+        -1.0, # right_shoulder/joint_8
+        1.0,  # right_elbow/joint_9
+        -1.0, # right_forearm_roll/joint_10
+        1.0,  # right_wrist_angle/joint_11
+        -1.0, # right_wrist_rotate/joint_12
+        -1.0, # right_gripper/joint_13
     ],
     dtype=np.float32,
 )
