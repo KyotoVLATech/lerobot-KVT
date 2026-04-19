@@ -395,6 +395,20 @@ class SARMEncodingProcessorStep(ProcessorStep):
         """Set evaluation mode (disable augmentations)."""
         return self.train(False)
 
+    @staticmethod
+    def _clip_features_to_tensor(features) -> torch.Tensor:
+        """Return projected CLIP features across Transformers 4.x and 5.x APIs."""
+        if isinstance(features, torch.Tensor):
+            return features
+
+        if hasattr(features, "pooler_output"):
+            return features.pooler_output
+
+        if isinstance(features, tuple):
+            return features[0]
+
+        raise TypeError(f"Unsupported CLIP output type: {type(features)!r}")
+
     @torch.no_grad()
     def _encode_images_batch(self, images: np.ndarray) -> torch.Tensor:
         """Encode a batch of images using CLIP.
@@ -433,7 +447,9 @@ class SARMEncodingProcessorStep(ProcessorStep):
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             # Get image embeddings
-            embeddings = self.clip_model.get_image_features(**inputs).detach().cpu()
+            embeddings = self._clip_features_to_tensor(
+                self.clip_model.get_image_features(**inputs)
+            ).detach().cpu()
 
             # Handle single frame case
             if embeddings.dim() == 1:
@@ -460,7 +476,9 @@ class SARMEncodingProcessorStep(ProcessorStep):
         inputs = self.clip_processor.tokenizer([text], return_tensors="pt", padding=True, truncation=True)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        text_embedding = self.clip_model.get_text_features(**inputs).detach().cpu()
+        text_embedding = self._clip_features_to_tensor(
+            self.clip_model.get_text_features(**inputs)
+        ).detach().cpu()
         text_embedding = text_embedding.expand(batch_size, -1)
 
         return text_embedding
