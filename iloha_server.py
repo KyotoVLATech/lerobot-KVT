@@ -87,8 +87,8 @@ class RobotCommunicationNode:
         try:
             config = IlohaConfig(
                 left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
-                left_robstride_port="/dev/ttyUSB3",
-                right_robstride_port="/dev/ttyUSB2",
+                left_robstride_port="/dev/ttyUSB2",
+                right_robstride_port="/dev/ttyUSB0",
                 right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
