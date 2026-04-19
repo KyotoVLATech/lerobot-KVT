@@ -1,18 +1,22 @@
 import asyncio
+import collections
 import logging
 import math
 import struct
+import time
 from asyncio import Lock
 from dataclasses import dataclass
 from logging import Formatter, StreamHandler, getLogger
-from typing import Any, Optional, Union
-
+from typing import Any, List, Optional, Union
 import serial_asyncio
 
-from .constants import CommandType, MotorStatus, ParameterIndex, RunMode
+from .constants import CommandType, FaultCode, MotorStatus, ParameterIndex, RunMode
 
 # Improved logger configuration
 logger = getLogger(__name__)
+
+# デバッグ設定: Trueにすると各制御サイクルで電圧のみを個別に読み取り、コンソールに表示します
+DEBUG_VBUS_EVERY_CYCLE = False  # Trueにするとサイクルごとにバス負荷が2倍になるので通常はFalse
 logger.setLevel(logging.ERROR)
 handler_format = Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 stream_handler = StreamHandler()
@@ -79,6 +83,9 @@ class RobStrideController:
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
         self.lock = Lock()
+        # 診断用の統計情報
+        self._latencies = collections.defaultdict(list)
+        self._last_print_time = time.perf_counter()
 
     def _create_frame(
         self,
@@ -111,37 +118,47 @@ class RobStrideController:
                 logger.error("Serial connection is not open")
                 return None
 
-            try:
-                # Clear any pending data in the reader
-                # Note: StreamReader doesn't have reset_input_buffer,
-                # but we can read and discard any pending data
-                # while True:
-                #     try:
-                #         # Try to read with a very short timeout
-                #         pending = await asyncio.wait_for(
-                #             self.reader.read(1024), timeout=0.001
-                #         )
-                #         if not pending:
-                #             break
-                #     except asyncio.TimeoutError:
-                #         break
+            # 通信対象のモーターIDを抽出（デバッグ・診断用）
+            encoded_id_32bit = int.from_bytes(frame[2:6], "big")
+            motor_id = (encoded_id_32bit >> 3) & 0xFF
 
-                # Send the frame
+            start_time = time.perf_counter()
+            try:
+                # 1. Clear any pending data in the reader (flush)
+                while not self.reader.at_eof():
+                    try:
+                        # Non-blocking check for internal buffer
+                        await asyncio.wait_for(self.reader.read(1024), timeout=0.0001)
+                    except asyncio.TimeoutError:
+                        break
+
+                # 2. Send the frame
                 self.writer.write(frame)
                 await self.writer.drain()
-                # logger.debug(f"Sent frame: {frame.hex(' ')}")
 
-                # Read response with timeout
+                # 3. Read response with short timeout (15ms)
                 response = await asyncio.wait_for(
-                    self.reader.readuntil(b'\x0d\x0a'), timeout=1.0
+                    self.reader.readuntil(b'\x0d\x0a'), timeout=0.015
                 )
 
             except asyncio.TimeoutError:
-                logger.error("No response received from motor within timeout")
+                # Just log and return None without disabling the motor
+                logger.error(f"[Motor {motor_id}] No response received from motor within 15ms")
                 return None
             except Exception as e:
-                logger.error(f"Error during serial I/O: {e}")
+                logger.error(f"[Motor {motor_id}] Error during serial I/O: {e}")
                 return None
+            finally:
+                # 診断用統計の記録
+                end_time = time.perf_counter()
+                latency_ms = (end_time - start_time) * 1000
+                
+                self._latencies[motor_id].append(latency_ms)
+
+                # 5秒おきに統計を表示
+                if end_time - self._last_print_time > 5.0:
+                    self._print_latency_stats()
+                    self._last_print_time = end_time
 
             if response and response.startswith(b'AT') and response.endswith(b'\r\n'):
                 # logger.debug(f"Received valid response: {response.hex(' ')}")
@@ -157,6 +174,19 @@ class RobStrideController:
                 )
             return None
 
+    def _print_latency_stats(self):
+        """直近の通信遅延統計をターミナルに表示"""
+        print(f"\n--- RobStride Latency Stats ({self.port}) ---")
+        for motor_id, latencies in sorted(self._latencies.items()):
+            if not latencies:
+                continue
+            avg_lat = sum(latencies) / len(latencies)
+            max_lat = max(latencies)
+            count = len(latencies)
+            print(f" Motor {motor_id:3d} | Avg: {avg_lat:6.2f} ms | Max: {max_lat:6.2f} ms | Samples: {count:4d}")
+            latencies.clear()  # 次回のためにクリア
+        print("-------------------------------------------\n")
+
     async def _read_parameter(self, motor_id: int, index: int) -> Optional[bytes]:
         payload = struct.pack('<H', index) + b'\x00' * 6
         frame = self._create_frame(
@@ -165,6 +195,204 @@ class RobStrideController:
         response = await self._send_and_receive(frame)
         if response:
             return response[11:15]
+        return None
+
+    async def ping(self, motor_id: int) -> bool:
+        """
+        モーターとの通信が可能か確認する。
+        
+        Args:
+            motor_id: 確認対象のモーターID
+        Returns:
+            bool: 通信成功ならTrue
+        """
+        # index 0x0000 (Mode) を読み取って疎通確認
+        res = await self._read_parameter(motor_id, 0x0000)
+        return res is not None
+
+    def decode_fault_code(self, code: int) -> List[str]:
+        """故障コードを人間が読みやすい文字列のリストに変換"""
+        if code == 0:
+            return ["None"]
+        
+        faults = []
+        for fault in FaultCode:
+            if fault != FaultCode.NONE and (code & fault.value):
+                # Enum名のアンダースコアをスペースに置換して読みやすく
+                faults.append(fault.name.replace("_", " ").title())
+        
+        if not faults:
+            return [f"Unknown Fault (0x{code:08X})"]
+        return faults
+
+    async def get_parameter(
+        self,
+        motor_id: int,
+        index: ParameterIndex,
+        data_type: str = "float"
+    ) -> Optional[Union[float, int]]:
+        """
+        モーターから特定のパラメータを読み出す。
+        
+        Args:
+            motor_id: モーターID
+            index: ParameterIndex
+            data_type: "float", "uint32", "uint16", "uint8"
+        """
+        raw_bytes = await self._read_parameter(motor_id, index.value)
+        if raw_bytes is None:
+            return None
+        
+        try:
+            if data_type == "float":
+                # float (4 bytes, little endian)
+                return struct.unpack('<f', raw_bytes)[0]
+            elif data_type == "uint32":
+                # uint32 (4 bytes, little endian)
+                return struct.unpack('<I', raw_bytes)[0]
+            elif data_type == "uint16":
+                # uint16 (2 bytes, checking both positions as it might be in Type 2 payload)
+                val = struct.unpack('<H', raw_bytes[0:2])[0]
+                # If value is 0 but it's a temperature register, it might be in the second half
+                if val == 0 and len(raw_bytes) >= 4:
+                    val = struct.unpack('<H', raw_bytes[2:4])[0]
+                return val
+            elif data_type == "int16":
+                # int16 (2 bytes, checking both positions)
+                val = struct.unpack('<h', raw_bytes[0:2])[0]
+                if val == 0 and len(raw_bytes) >= 4:
+                    val = struct.unpack('<h', raw_bytes[2:4])[0]
+                return val
+            elif data_type == "int32":
+                # int32 (4 bytes, little endian)
+                return struct.unpack('<i', raw_bytes)[0]
+            elif data_type == "uint8":
+                # uint8 (1 byte at the beginning)
+                return raw_bytes[0]
+            else:
+                logger.error(f"Unsupported data type: {data_type}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to decode parameter {index.name}: {e}")
+            return None
+
+    async def get_motor_status_comprehensive(self, motor_id: int) -> Optional[dict]:
+        """
+        モーターの全パラメータ（主要なもの）を読み出し、デコード済み辞書として返す
+        """
+        if motor_id not in self.motors:
+            return None
+
+        status = {"motor_id": motor_id}
+        
+        # 1. リアルタイムフィードバックから温度、トルク等を取得
+        feedback = await self.get_motor_feedback(motor_id)
+        if feedback:
+            status["motor_temp"] = feedback["temp"]
+            status["torque_fdb"] = feedback["torque"]
+            # 注意: Feedbackフレームのトルクは生値なので必要に応じてスケーリングが必要な場合がありますが、
+            # 現状はそのまま格納します
+        
+        # 2. 読み取るパラメータとその型のリスト
+        params_to_read = [
+            # 制御モード・目標
+            (ParameterIndex.RUN_MODE, "uint8"),
+            (ParameterIndex.LOC_REF, "float"),
+            (ParameterIndex.SPD_REF, "float"),
+            (ParameterIndex.IQ_REF, "float"),
+            
+            # 実測値
+            (ParameterIndex.MECH_POS, "float"),
+            (ParameterIndex.MECH_VELO, "float"),
+            (ParameterIndex.VBUS, "float"),
+            (ParameterIndex.IQF, "float"),
+            
+            # 制限設定
+            (ParameterIndex.LIMIT_TORQUE, "float"),
+            (ParameterIndex.LIMIT_SPD, "float"),
+            (ParameterIndex.LIMIT_CUR, "float"),
+            (ParameterIndex.VEL_MAX, "float"),
+            (ParameterIndex.ACC_SET, "float"),
+            (ParameterIndex.ACC_RAD, "float"),
+            
+            # ゲイン設定
+            (ParameterIndex.LOC_KP, "float"),
+            (ParameterIndex.SPD_KP, "float"),
+            (ParameterIndex.SPD_KI, "float"),
+            (ParameterIndex.SPD_FILT_GAIN, "float"),
+            (ParameterIndex.CUR_KP, "float"),
+            (ParameterIndex.CUR_KI, "float"),
+            (ParameterIndex.CUR_FILT_GAIN, "float"),
+            
+            # システム・通信
+            (ParameterIndex.CAN_TIMEOUT, "uint32"),
+            (ParameterIndex.EPSCAN_TIME, "uint16"),
+            (ParameterIndex.ZERO_STA, "uint8"),
+            (ParameterIndex.DAMPER, "uint8"),
+            (ParameterIndex.ADD_OFFSET, "float"),
+            
+            # 故障診断
+            (ParameterIndex.FAULT_CODE, "uint32"),
+
+            # --- 内部詳細計追加 ---
+            # MOTOR_TEMP と TORQUE_FDB はフィードバックフレームから取得済みのためここからは除外
+            (ParameterIndex.MCU_TEMP, "int16"),
+            (ParameterIndex.BOARD_TEMP, "int16"),
+            (ParameterIndex.DRV_TEMP, "int16"),
+            (ParameterIndex.ID_RAW, "float"),
+            (ParameterIndex.IQ_RAW, "float"),
+            (ParameterIndex.DRV_FAULT, "uint16"),
+        ]
+
+        async def read_and_store(p_idx, d_type):
+            val = await self.get_parameter(motor_id, p_idx, d_type)
+            if val is not None:
+                # 温度パラメータは 10倍 されているので 0.1倍 する
+                temp_indices = [
+                    ParameterIndex.MOTOR_TEMP,
+                    ParameterIndex.MCU_TEMP,
+                    ParameterIndex.BOARD_TEMP,
+                    ParameterIndex.DRV_TEMP
+                ]
+                if p_idx in temp_indices:
+                    val = val / 10.0
+                
+                if p_idx == ParameterIndex.FAULT_CODE:
+                    status["fault_code_raw"] = val
+                    status["fault_list"] = self.decode_fault_code(val)
+                elif p_idx == ParameterIndex.RUN_MODE:
+                    try:
+                        status["run_mode"] = RunMode(val).name
+                    except ValueError:
+                        status["run_mode"] = f"Unknown ({val})"
+                else:
+                    status[p_idx.name.lower()] = val
+
+        # 順次読み込み（Lock競合を考慮）
+        for p_idx, d_type in params_to_read:
+            await read_and_store(p_idx, d_type)
+            
+        return status
+
+    async def get_version(self, motor_id: int) -> Optional[dict]:
+        """モーターのハードウェア/ソフトウェアバージョンを取得 (Type 26)"""
+        frame = self._create_frame(CommandType.GET_VERSION, motor_id)
+        response = await self._send_and_receive(frame)
+        if response and len(response) >= 15:
+            # ペイロードは response[7:15]
+            # Byte 0~3: ハードウェアバージョン (Big-endian)
+            # Byte 4~7: ソフトウェアバージョン (Big-endian)
+            # マニュアルの例: 0x01000000 -> V1.0.0.0
+            hw_v = response[7:11]
+            sw_v = response[11:15]
+            
+            def fmt(b):
+                return f"V{b[0]}.{b[1]}.{b[2]}.{b[3]}"
+                
+            return {
+                "hw": fmt(hw_v),
+                "sw": fmt(sw_v)
+            }
         return None
 
     async def _write_parameter(
@@ -258,6 +486,28 @@ class RobStrideController:
         self.motors[motor_id]._set_enabled(False)
         self.motors[motor_id]._set_mode(None)
         logger.info(f"Disable command sent successfully to motor {motor_id}")
+
+    async def save_parameters(self, motor_id: int) -> bool:
+        """
+        現在のパラメータ設定をモーターの不揮発メモリ（フラッシュ）に保存します。
+        書き換え回数に制限があるため、設定変更時のみ呼び出してください。
+        """
+        if motor_id not in self.motors:
+            logger.error(f"Motor ID {motor_id} not found in motor list")
+            return False
+
+        logger.info(f"Saving parameters to NVM for motor {motor_id}")
+        # 仕様書に基づき、ペイロードに 01 02 03 04 05 06 07 08 を設定
+        payload = b"\x01\x02\x03\x04\x05\x06\x07\x08"
+        frame = self._create_frame(CommandType.SAVE_PARAM, motor_id, data_payload=payload)
+        response = await self._send_and_receive(frame)
+        
+        if response is not None:
+            logger.info(f"Save parameters successful for motor {motor_id}")
+            return True
+        else:
+            logger.error(f"Save parameters failed for motor {motor_id}")
+            return False
 
     def _check_motor_enabled(self, motor_id: int) -> bool:
         """モーターが有効かどうかをチェック"""
@@ -393,15 +643,22 @@ class RobStrideController:
         logger.info(
             f"Setting target position to {position_rad:.2f} rad for motor {motor_id}"
         )
+        # --- 電圧デバッグスパム ---
+        if DEBUG_VBUS_EVERY_CYCLE:
+            vbus = await self.get_parameter(motor_id, ParameterIndex.VBUS, "float")
+            if vbus is not None:
+                print(f"DEBUG [Motor {motor_id}] VBUS: {vbus:.2f}V")
+        # ------------------------
+
+        target_pos_rad = position_rad + self.motors[motor_id].offset
         result = await self._write_parameter(
-            motor_id,
-            ParameterIndex.LOC_REF.value,
-            position_rad + self.motors[motor_id].offset,
+            motor_id, ParameterIndex.LOC_REF.value, target_pos_rad
         )
         if result is None:
+            # Trigger diagnostic dump on failure
+            await self.log_motor_diagnostics(motor_id, reason="Communication Error / Timeout")
             logger.error(f"Failed to send target position to motor {motor_id}")
-        else:
-            logger.info(f"Target position command sent successfully to motor {motor_id}")
+        return result
 
     # --- Velocity Mode Methods ---
     async def set_mode_velocity(self, motor_id: int) -> bool:
@@ -519,27 +776,101 @@ class RobStrideController:
         """async with構文の終了時に、安全にモーターを停止し、切断します。"""
         if self.writer and not self.writer.is_closing():
             logger.info(f"Safely shutting down motors on {self.port} sequentially...")
-
-            # ★安全な逐次実行（forループ）
             for motor_id in self.motors.keys():
                 await self.set_target_velocity(motor_id, 0.0)
                 await self.set_target_current(motor_id, 0.0)
-
             await asyncio.sleep(0.1)
-
             for motor_id in self.motors.keys():
                 await self.disable(motor_id)
-
         await self.disconnect()
 
     def __enter__(self) -> 'RobStrideController':
-        """with構文の開始時に接続を行います。（非推奨：async withを使用してください）"""
-        raise NotImplementedError(
-            "Use 'async with' instead of 'with' for RobStrideController"
-        )
+        raise NotImplementedError("Use 'async with' instead of 'with'")
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """with構文の終了時の処理（非推奨：async withを使用してください）"""
-        raise NotImplementedError(
-            "Use 'async with' instead of 'with' for RobStrideController"
+        raise NotImplementedError("Use 'async with' instead of 'with'")
+
+    async def get_motor_feedback(self, motor_id: int) -> Optional[dict]:
+        """
+        Communication Type 1 (GET_STATUS) を送り、
+        Type 2 (Feedback Frame) からリアルタイム情報を取得する
+        """
+        frame = self._create_frame(
+            CommandType.GET_STATUS, motor_id, self.host_id, b'\x00' * 8
         )
+        response = await self._send_and_receive(frame)
+        if response and len(response) == 17:
+            payload = response[7:15]
+            try:
+                # Type 2 Feedback Frame uses mapped uint16 for most values
+                # according to RobStride/CyberGear protocol.
+                angle_raw = struct.unpack('>H', payload[0:2])[0]
+                velocity_raw = struct.unpack('>H', payload[2:4])[0]
+                torque_raw = struct.unpack('>H', payload[4:6])[0]
+                temp_raw = struct.unpack('>H', payload[6:8])[0]
+                
+                # Conversion functions
+                def uint_to_float(x, min_v, max_v):
+                    return min_v + (max_v - min_v) * x / 65535.0
+
+                import math
+                return {
+                    "angle": uint_to_float(angle_raw, -4 * math.pi, 4 * math.pi),
+                    "velocity": uint_to_float(velocity_raw, -30.0, 30.0),
+                    "torque": uint_to_float(torque_raw, -12.0, 12.0),
+                    "temp": temp_raw / 10.0
+                }
+            except Exception as e:
+                logger.error(f"Failed to parse feedback frame for motor {motor_id}: {e}")
+        return None
+
+    async def log_motor_diagnostics(self, motor_id: int, reason: str = "Diagnostic"):
+        """
+        モーターの内部状態を読み出し、詳細な診断ログを出力する (レート制限付き)
+        """
+        now = time.time()
+        if not hasattr(self, "_last_diag_time"):
+            self._last_diag_time = {}
+        if now - self._last_diag_time.get(motor_id, 0) < 3.0:
+            return
+
+        self._last_diag_time[motor_id] = now
+        
+        logger.warning(f"🔍 [DIAGNOSTIC] Motor {motor_id} Error detected. Reason: {reason}")
+        
+        try:
+            feedback = await self.get_motor_feedback(motor_id)
+            fault_sta = await self.get_parameter(motor_id, ParameterIndex.FAULT_STA, "uint32")
+            drv_fault = await self.get_parameter(motor_id, ParameterIndex.DRV_FAULT, "uint16")
+            vbus = await self.get_parameter(motor_id, ParameterIndex.VBUS, "float")
+            mcu_temp_reg = await self.get_parameter(motor_id, ParameterIndex.MCU_TEMP, "int16")
+            
+            m_temp = feedback["temp"] if feedback else "N/A"
+            torque = feedback["torque"] if feedback else "N/A"
+            mcu_temp = mcu_temp_reg / 10.0 if mcu_temp_reg is not None and mcu_temp_reg != 0 else "N/A"
+            
+            fault_desc = "None"
+            if fault_sta:
+                from .constants import FaultCode
+                active_faults = [f.name for f in FaultCode if fault_sta & f.value]
+                fault_desc = ", ".join(active_faults) if active_faults else f"Unknown ({hex(fault_sta)})"
+
+            diag_msg = (
+                f"\n"
+                f"╔════════════════════════════════════════════════════════════╗\n"
+                f"║ [ MOTOR {motor_id} DIAGNOSTIC REPORT ]\n"
+                f"╟────────────────────────────────────────────────────────────╢\n"
+                f"║  - Error Reason : {reason}\n"
+                f"║  - Temp (Motor) : {m_temp}℃\n"
+                f"║  - Temp (MCU)   : {mcu_temp}℃\n"
+                f"║  - Bus Voltage  : {vbus if vbus is not None else 'N/A'}V\n"
+                f"║  - Raw Torque   : {torque}\n"
+                f"║  - Fault Status : {fault_desc}\n"
+                f"║  - Fault Raw    : {hex(fault_sta) if fault_sta is not None else 'N/A'}\n"
+                f"║  - Driver Fault : {drv_fault if drv_fault is not None else 'N/A'}\n"
+                f"╚════════════════════════════════════════════════════════════╝\n"
+            )
+            print(diag_msg)
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve diagnostics for motor {motor_id}: {e}")

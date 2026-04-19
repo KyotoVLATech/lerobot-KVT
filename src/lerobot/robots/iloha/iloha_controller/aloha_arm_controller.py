@@ -1,7 +1,7 @@
 import asyncio
 import math
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 import numpy as np
 
 # Dynamixel関連のインポート
@@ -56,6 +56,7 @@ class AlohaArmController:
         dynamixel_port: str,
         robstride_constants: List[Any],
         dynamixel_constants: List[Any],
+        robstride_current_limit: Union[float, dict[int, float]] = 2.0,
     ):
         """
         ALOHAコントローラーを初期化
@@ -92,34 +93,36 @@ class AlohaArmController:
         self.dynamixel_controller: Optional[DynamixelController] = None
 
         # モーター設定
+        self.robstride_current_limit = robstride_current_limit
         self._setup_motors()
 
     def _setup_motors(self) -> None:
         """モーター設定を初期化"""
-        # RobStrideのリミット設定
-        robstride_limits = RobStrideLimits(
-            pp_vel_max=np.pi, # PP最大速度 [rad/s]
-            pp_acc_set=np.pi/2,  # PP加速度設定 [rad/s²]
-            pp_limit_cur=10.0,  # PP電流制限 [A]
-            csp_limit_spd=1.57,  # CSP速度制限 [rad/s]
-            csp_limit_cur=4.0,  # CSP電流制限 [A]
-        )
+        def get_limits(m_id):
+            limit = self.robstride_current_limit.get(m_id, 2.0) if isinstance(self.robstride_current_limit, dict) else self.robstride_current_limit
+            return RobStrideLimits(
+                pp_vel_max=np.pi, # PP最大速度 [rad/s]
+                pp_acc_set=np.pi/2,  # PP加速度設定 [rad/s²]
+                pp_limit_cur=limit,  # PP電流制限 [A]
+                csp_limit_spd=1.57,  # CSP速度制限 [rad/s]
+                csp_limit_cur=limit,  # CSP電流制限 [A]
+            )
 
         self.robstride_motors = [
             RobStride(
                 id=self.robstride01_constants.ID,
                 offset=self.robstride01_constants.DEFAULT_OFFSET,
-                limits=robstride_limits,
+                limits=get_limits(self.robstride01_constants.ID),
             ),
             RobStride(
                 id=self.robstride02_constants.ID,
                 offset=self.robstride02_constants.DEFAULT_OFFSET,
-                limits=robstride_limits,
+                limits=get_limits(self.robstride02_constants.ID),
             ),
             RobStride(
                 id=self.robstride03_constants.ID,
                 offset=self.robstride03_constants.DEFAULT_OFFSET,
-                limits=robstride_limits,
+                limits=get_limits(self.robstride03_constants.ID),
             ),
         ]
 
@@ -186,11 +189,31 @@ class AlohaArmController:
             raise
 
     async def _setup_robstride_motors(self, mode) -> None:
-        """RobStrideモーターをCSPモードに設定し有効化"""
-        print("  RobStrideモーターセットアップ中...")
+        """RobStrideモーターをモード設定し有効化"""
+        print(f"  RobStrideモーターセットアップ中 ({mode}モード)...")
 
         assert self.robstride_controller is not None
 
+        # 1. まず全モーターの疎通確認を行う
+        failed_motors = []
+        statuses = []
+        for robstride_motor in self.robstride_motors:
+            motor_id = robstride_motor.id
+            is_alive = await self.robstride_controller.ping(motor_id)
+            if is_alive:
+                statuses.append(f"ID{motor_id}:OK")
+            else:
+                statuses.append(f"ID{motor_id}:FAILED")
+                failed_motors.append(motor_id)
+        
+        # 接続状況のサマリーを表示
+        status_line = " | ".join(statuses)
+        print(f"  📊 接続状況: [ {status_line} ]")
+
+        if failed_motors:
+            raise RuntimeError(f"接続失敗したRobStrideモーターがあります: {failed_motors}")
+
+        # 2. 全て疎通していれば設定を続行
         for robstride_motor in self.robstride_motors:
             motor_id = robstride_motor.id
             if mode == "CSP":
@@ -206,10 +229,14 @@ class AlohaArmController:
                     raise RuntimeError(f"RobStride Motor{motor_id} PPモード設定失敗")
                 if not await self.robstride_controller.enable(motor_id):
                     raise RuntimeError(f"RobStride Motor{motor_id} 有効化失敗")
+                # リミット適用
                 if not await self.robstride_controller.apply_pp_limits(motor_id):
                     raise RuntimeError(f"RobStride Motor{motor_id} リミット設定失敗")
             else:
                 raise ValueError("mode must be either 'CSP' or 'PP'")
+
+            # 設定したリミットを不揮発メモリに保存（瞬断・再起動時に16Aに戻るのを防ぐ）
+            await self.robstride_controller.save_parameters(motor_id)
 
     async def _move_to_initial_position(self) -> None:
         """全モーターを初期位置(0.0 rad)に移動"""

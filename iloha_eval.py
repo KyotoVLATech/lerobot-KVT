@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 import numpy as np
 
-from lerobot.robots.iloha import Iloha, IlohaConfig, JOINT_NAMES
+from lerobot.robots.iloha import Iloha, IlohaConfig
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.configs.policies import PreTrainedConfig
@@ -31,6 +31,7 @@ from lerobot.utils.control_utils import predict_action
 from lerobot.utils.utils import get_safe_torch_device, init_logging
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 from lerobot.processor.rename_processor import rename_stats
+from iloha_mapping import JOINT_NAMES, aloha_to_iloha, iloha_to_aloha
 
 
 # カメラ設定（my_aloha_server.pyと同じ）
@@ -129,6 +130,8 @@ async def evaluation_loop(
     
     frame_count = 0
     start_episode_t = time.perf_counter()
+    action_names = tuple(ds_features["action"]["names"])
+    state_names = tuple(ds_features["observation.state"]["names"])
     
     while True:
         start_loop_t = time.perf_counter()
@@ -141,6 +144,11 @@ async def evaluation_loop(
         
         # 1. ロボットから観測を取得
         obs = robot.get_observation()
+        aloha_state = iloha_to_aloha([obs[name] for name in JOINT_NAMES])
+        obs_for_policy = {
+            **obs,
+            **{name: float(aloha_state[i]) for i, name in enumerate(state_names)},
+        }
         
         if frame_count == 0:
             print(f"観測データのキー: {list(obs.keys())}")
@@ -148,7 +156,7 @@ async def evaluation_loop(
         # 2. データセット形式のフレームを構築
         observation_frame = build_dataset_frame(
             ds_features, 
-            obs, 
+            obs_for_policy,
             prefix="observation"
         )
         
@@ -171,17 +179,19 @@ async def evaluation_loop(
             # 4. Tensorをnumpy配列に変換し、バッチ次元を削除
             if isinstance(action_tensor, dict):
                 # 辞書形式の場合（一部のポリシー）
-                action_array = np.array([action_tensor[name] for name in JOINT_NAMES], dtype=np.float32)
-                action_values = action_tensor
+                action_array_aloha = np.array([action_tensor[name] for name in action_names], dtype=np.float32)
+                action_values = {name: float(action_array_aloha[i]) for i, name in enumerate(action_names)}
             else:
                 # Tensor形式の場合
-                action_array = action_tensor.squeeze(0).cpu().numpy()  # (1, 14) -> (14,)
+                action_array_aloha = action_tensor.squeeze(0).cpu().numpy()  # (1, 14) -> (14,)
                 # 辞書形式に変換（後の処理のため）
-                action_values = {name: float(action_array[i]) for i, name in enumerate(JOINT_NAMES)}
+                action_values = {name: float(action_array_aloha[i]) for i, name in enumerate(action_names)}
+            action_array_iloha = aloha_to_iloha(action_array_aloha)
             
             if frame_count == 0:
-                print(f"予測されたアクション形状: {action_array.shape}")
-                print(f"アクション値（最初の3要素）: {action_array[:3]}")
+                print(f"予測されたアクション形状: {action_array_aloha.shape}")
+                print(f"Alohaアクション値（最初の3要素）: {action_array_aloha[:3]}")
+                print(f"Iloha送信値（最初の3要素）: {action_array_iloha[:3]}")
         
         except Exception as e:
             print(f"アクション予測エラー: {e}")
@@ -190,13 +200,13 @@ async def evaluation_loop(
             break
         
         # 6. ロボットにアクションを送信
-        await robot.async_send_action(action_array)
+        await robot.async_send_action(action_array_iloha)
         
         # 7. データセットに保存（オプション）
         if dataset is not None:
             action_frame = build_dataset_frame(
                 ds_features, 
-                {name: action_values[name] for name in JOINT_NAMES}, 
+                action_values,
                 prefix="action"
             )
             frame = {**observation_frame, **action_frame, "task": task}
@@ -204,7 +214,7 @@ async def evaluation_loop(
         
         # 8. 可視化（オプション）
         if display_data:
-            log_rerun_data(observation=obs, action=action_values)
+            log_rerun_data(observation=obs_for_policy, action=action_values)
         
         frame_count += 1
         if frame_count % 30 == 0:
@@ -315,7 +325,7 @@ async def main(args):
             repo_id,
             args.fps,
             root=dataset_path,
-            robot_type="my_aloha",
+            robot_type="aloha",
             features=dataset_features,
             use_videos=True,
             image_writer_processes=0,

@@ -4,22 +4,7 @@ from typing import Any
 import asyncio
 from .iloha_controller.aloha_controller import AlohaController, AlohaArm
 
-JOINT_NAMES = [
-    "left_waist",
-    "left_shoulder",
-    "left_elbow",
-    "left_forearm_roll",
-    "left_wrist_angle",
-    "left_wrist_rotate",
-    "left_gripper",
-    "right_waist",
-    "right_shoulder",
-    "right_elbow",
-    "right_forearm_roll",
-    "right_wrist_angle",
-    "right_wrist_rotate",
-    "right_gripper",
-]
+JOINT_NAMES = [f"joint_{i}" for i in range(14)]
 
 class Iloha():
     config_class = IlohaConfig
@@ -89,6 +74,7 @@ class Iloha():
                 self.config.left_robstride_port,
                 self.config.right_dynamixel_port,
                 self.config.left_dynamixel_port,
+                robstride_current_limit=self.config.current_limit_robstride,
             )
             # AlohaControllerを非同期で初期化
             await self.aloha.__aenter__()

@@ -1,0 +1,509 @@
+Unity-Iloha通信サーバーを起動します...
+WebSocketサーバーを開始: ポート8080
+🤖 ALOHA双腕コントローラー初期化中...
+  両アーム並列初期化中...
+🔧 ALOHA Controller初期化中...
+  RobStrideコントローラー接続中...
+  Dynamixelコントローラー接続中...
+🔧 ALOHA Controller初期化中...
+  RobStrideコントローラー接続中...
+  Dynamixelコントローラー接続中...
+  RobStrideモーターセットアップ中...
+  RobStrideモーターセットアップ中...
+  初期位置へ移動中...
+  初期位置へ移動中...
+✅ ALOHA Controller初期化完了!
+✅ ALOHA Controller初期化完了!
+✅ ALOHA双腕コントローラー初期化完了!
+Ilohaロボット初期化・接続完了
+サーバー起動完了。Unityからの接続を待機中...
+WebSocket接続: ('192.168.0.137', 38724)
+Unity側からのメッセージを待機中...
+関節角度受信開始: ポート8082UDP通信スレッドと非同期ロボット制御タスクを開始しました
+新しいロボット制御タスクを開始しました
+ロボット制御ワーカー開始
+
+WebSocketメッセージ受信: {"command":"reset_robot"}
+ロボットリセット要求を受信しました
+ロボットリセット処理開始...
+制御タスク停止シグナル送信中...
+ロボット制御タスクの停止を待機中...
+ロボット制御ワーカー終了
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.84 ms | Max:   4.54 ms | Samples:   12
+ Motor   5 | Avg:   4.22 ms | Max:   6.59 ms | Samples:   11
+ Motor   6 | Avg:   3.96 ms | Max:   4.58 ms | Samples:   11
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.87 ms | Max:   5.21 ms | Samples:   12
+ Motor   2 | Avg:   4.23 ms | Max:   6.49 ms | Samples:   11
+ Motor   3 | Avg:   4.10 ms | Max:   4.59 ms | Samples:   11
+-------------------------------------------
+
+関節角度受信終了
+ホームポジション移動完了
+UDP受信スレッドとロボット制御タスクを再開中...
+UDP受信スレッドを再起動中...
+関節角度受信開始: ポート8082
+新しいロボット制御タスクを開始しました
+ロボットリセット処理完了
+ロボット制御ワーカー開始
+WebSocketメッセージ受信: {"command":"recording"}
+recording要求を受信しました
+cam_high を接続中...
+cam_left_wrist を接続中...
+cam_right_wrist を接続中...
+カメラ初期化エラー: Failed to open RealSenseCamera(146222252104).Run `lerobot-find-cameras realsense` to find available cameras.
+初回アクション受信を記録しました。安定化するまで相対制限付きで制御します。
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.16 ms | Max:   3.26 ms | Samples:    2
+ Motor   5 | Avg:   2.94 ms | Max:   2.95 ms | Samples:    2
+ Motor   6 | Avg:   3.85 ms | Max:   3.85 ms | Samples:    2
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.19 ms | Max:   3.27 ms | Samples:    2
+ Motor   2 | Avg:   3.98 ms | Max:   4.06 ms | Samples:    2
+ Motor   3 | Avg:   3.89 ms | Max:   3.94 ms | Samples:    2
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.09 ms | Max:   3.55 ms | Samples:  291
+ Motor   5 | Avg:   3.72 ms | Max:   4.25 ms | Samples:  292
+ Motor   6 | Avg:   3.78 ms | Max:   4.23 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.10 ms | Max:   3.60 ms | Samples:  291
+ Motor   2 | Avg:   3.92 ms | Max:   4.24 ms | Samples:  292
+ Motor   3 | Avg:   3.93 ms | Max:   4.23 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.13 ms | Max:   3.52 ms | Samples:  290
+ Motor   5 | Avg:   3.73 ms | Max:   4.22 ms | Samples:  289
+ Motor   6 | Avg:   3.81 ms | Max:   4.23 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.12 ms | Max:   3.57 ms | Samples:  290
+ Motor   2 | Avg:   3.91 ms | Max:   4.29 ms | Samples:  289
+ Motor   3 | Avg:   3.94 ms | Max:   4.20 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.14 ms | Max:   3.48 ms | Samples:  290
+ Motor   2 | Avg:   3.95 ms | Max:   4.25 ms | Samples:  290
+ Motor   3 | Avg:   3.94 ms | Max:   4.31 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.14 ms | Max:   3.48 ms | Samples:  290
+ Motor   5 | Avg:   3.76 ms | Max:   4.30 ms | Samples:  290
+ Motor   6 | Avg:   3.85 ms | Max:   4.25 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.14 ms | Max:   3.58 ms | Samples:  290
+ Motor   5 | Avg:   3.80 ms | Max:   4.25 ms | Samples:  290
+ Motor   6 | Avg:   3.81 ms | Max:   4.30 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.13 ms | Max:   3.66 ms | Samples:  290
+ Motor   2 | Avg:   3.95 ms | Max:   4.25 ms | Samples:  290
+ Motor   3 | Avg:   3.95 ms | Max:   4.31 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.09 ms | Max:   3.54 ms | Samples:  290
+ Motor   2 | Avg:   3.91 ms | Max:   4.19 ms | Samples:  291
+ Motor   3 | Avg:   3.93 ms | Max:   4.19 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.09 ms | Max:   3.49 ms | Samples:  290
+ Motor   5 | Avg:   3.71 ms | Max:   4.18 ms | Samples:  291
+ Motor   6 | Avg:   3.79 ms | Max:   4.19 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.10 ms | Max:   3.57 ms | Samples:  291
+ Motor   2 | Avg:   3.93 ms | Max:   4.20 ms | Samples:  290
+ Motor   3 | Avg:   3.95 ms | Max:   4.24 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.11 ms | Max:   3.48 ms | Samples:  291
+ Motor   5 | Avg:   3.77 ms | Max:   4.24 ms | Samples:  290
+ Motor   6 | Avg:   3.83 ms | Max:   4.27 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.06 ms | Max:   3.44 ms | Samples:  292
+ Motor   2 | Avg:   3.90 ms | Max:   4.16 ms | Samples:  292
+ Motor   3 | Avg:   3.91 ms | Max:   4.21 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.07 ms | Max:   3.51 ms | Samples:  292
+ Motor   5 | Avg:   3.74 ms | Max:   4.16 ms | Samples:  292
+ Motor   6 | Avg:   3.78 ms | Max:   4.17 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.09 ms | Max:   3.43 ms | Samples:  291
+ Motor   2 | Avg:   3.92 ms | Max:   4.23 ms | Samples:  291
+ Motor   3 | Avg:   3.91 ms | Max:   4.26 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.10 ms | Max:   3.50 ms | Samples:  291
+ Motor   5 | Avg:   3.79 ms | Max:   4.24 ms | Samples:  291
+ Motor   6 | Avg:   3.83 ms | Max:   4.25 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.06 ms | Max:   3.51 ms | Samples:  292
+ Motor   2 | Avg:   3.91 ms | Max:   4.17 ms | Samples:  292
+ Motor   3 | Avg:   3.91 ms | Max:   4.25 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.06 ms | Max:   3.53 ms | Samples:  292
+ Motor   5 | Avg:   3.69 ms | Max:   4.18 ms | Samples:  292
+ Motor   6 | Avg:   3.83 ms | Max:   4.22 ms | Samples:  292
+-------------------------------------------
+
+2026-04-12 21:13:29,324 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,340 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,356 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,373 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,389 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,405 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+
+╔════════════════════════════════════════════════════════════╗
+║ [ MOTOR 3 DIAGNOSTIC REPORT ]
+╟────────────────────────────────────────────────────────────╢
+║  - Error Reason : Communication Error / Timeout
+║  - Temp (Motor) : N/A℃
+║  - Temp (MCU)   : N/A℃
+║  - Bus Voltage  : N/AV
+║  - Raw Torque   : N/A
+║  - Fault Status : None
+║  - Fault Raw    : N/A
+║  - Driver Fault : N/A
+╚════════════════════════════════════════════════════════════╝
+
+2026-04-12 21:13:29,405 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,429 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,429 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,454 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,454 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,495 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,495 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,520 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,520 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,545 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,545 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,570 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,570 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,595 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,595 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,620 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,620 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,645 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,645 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,669 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,669 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,693 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,693 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,718 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,718 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,744 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,744 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,769 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,769 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,795 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,795 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,819 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,819 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,845 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,845 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,870 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,870 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,896 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,896 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,921 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,921 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,946 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,946 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,971 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,971 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:29,996 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:29,996 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,021 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,021 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,045 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,045 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,070 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,070 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,095 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,095 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,120 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,120 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,145 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,145 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,170 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,170 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,195 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,195 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,220 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,220 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,244 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,244 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,268 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,268 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,293 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,293 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,319 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,319 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,344 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,344 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,369 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,369 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,395 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,395 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,420 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.06 ms | Max:   3.41 ms | Samples:  268
+ Motor   2 | Avg:   3.91 ms | Max:   4.19 ms | Samples:  269
+ Motor   3 | Avg:   6.21 ms | Max:  18.39 ms | Samples:  274
+-------------------------------------------
+
+2026-04-12 21:13:30,420 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.07 ms | Max:   3.37 ms | Samples:  269
+ Motor   5 | Avg:   3.77 ms | Max:   4.22 ms | Samples:  269
+ Motor   6 | Avg:   3.78 ms | Max:   4.23 ms | Samples:  269
+-------------------------------------------
+
+2026-04-12 21:13:30,445 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,445 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,470 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,470 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,496 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,496 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,521 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,521 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,544 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,544 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,569 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,569 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,593 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,593 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,617 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,617 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,642 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,642 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,667 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,667 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,692 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,692 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,716 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,717 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,741 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,741 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,766 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,766 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,791 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,791 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,816 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,816 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,841 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - No response received from motor within 15ms
+2026-04-12 21:13:30,841 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+2026-04-12 21:13:30,860 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Invalid response format received: 30 07 0d 0a
+2026-04-12 21:13:30,865 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Invalid response format received: 0d 0a
+2026-04-12 21:13:30,865 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 3
+
+╔════════════════════════════════════════════════════════════╗
+║ [ MOTOR 1 DIAGNOSTIC REPORT ]
+╟────────────────────────────────────────────────────────────╢
+║  - Error Reason : Communication Error / Timeout
+║  - Temp (Motor) : 24.0℃
+║  - Temp (MCU)   : N/A℃
+║  - Bus Voltage  : 22.211462020874023V
+║  - Raw Torque   : 33617
+║  - Fault Status : None
+║  - Fault Raw    : 0x0
+║  - Driver Fault : 0
+╚════════════════════════════════════════════════════════════╝
+
+2026-04-12 21:13:30,885 - lerobot.robots.iloha.iloha_controller.robstride.src.robstride - ERROR - Failed to send target position to motor 1
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.07 ms | Max:   4.01 ms | Samples:  289
+ Motor   2 | Avg:   3.89 ms | Max:   4.15 ms | Samples:  284
+ Motor   3 | Avg:   4.75 ms | Max:  18.10 ms | Samples:  283
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.07 ms | Max:   3.45 ms | Samples:  283
+ Motor   5 | Avg:   3.74 ms | Max:   4.20 ms | Samples:  284
+ Motor   6 | Avg:   3.82 ms | Max:   4.23 ms | Samples:  284
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.06 ms | Max:   3.47 ms | Samples:  291
+ Motor   2 | Avg:   3.90 ms | Max:   4.24 ms | Samples:  291
+ Motor   3 | Avg:   3.93 ms | Max:   4.21 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.07 ms | Max:   3.50 ms | Samples:  292
+ Motor   5 | Avg:   3.75 ms | Max:   4.24 ms | Samples:  291
+ Motor   6 | Avg:   3.82 ms | Max:   4.20 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.11 ms | Max:   3.47 ms | Samples:  290
+ Motor   2 | Avg:   3.95 ms | Max:   4.31 ms | Samples:  290
+ Motor   3 | Avg:   3.94 ms | Max:   4.21 ms | Samples:  289
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.12 ms | Max:   3.47 ms | Samples:  290
+ Motor   5 | Avg:   3.79 ms | Max:   4.29 ms | Samples:  290
+ Motor   6 | Avg:   3.86 ms | Max:   4.20 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.06 ms | Max:   3.43 ms | Samples:  292
+ Motor   2 | Avg:   3.90 ms | Max:   4.25 ms | Samples:  291
+ Motor   3 | Avg:   3.92 ms | Max:   4.21 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.06 ms | Max:   3.35 ms | Samples:  292
+ Motor   5 | Avg:   3.71 ms | Max:   4.27 ms | Samples:  292
+ Motor   6 | Avg:   3.79 ms | Max:   4.21 ms | Samples:  292
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.06 ms | Max:   3.41 ms | Samples:  291
+ Motor   2 | Avg:   3.92 ms | Max:   4.29 ms | Samples:  291
+ Motor   3 | Avg:   3.91 ms | Max:   4.16 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.06 ms | Max:   3.46 ms | Samples:  291
+ Motor   5 | Avg:   3.72 ms | Max:   4.20 ms | Samples:  292
+ Motor   6 | Avg:   3.83 ms | Max:   4.19 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.08 ms | Max:   3.53 ms | Samples:  291
+ Motor   2 | Avg:   3.92 ms | Max:   4.22 ms | Samples:  291
+ Motor   3 | Avg:   3.92 ms | Max:   4.24 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.09 ms | Max:   3.57 ms | Samples:  291
+ Motor   5 | Avg:   3.76 ms | Max:   4.23 ms | Samples:  290
+ Motor   6 | Avg:   3.82 ms | Max:   4.19 ms | Samples:  291
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.12 ms | Max:   3.68 ms | Samples:  290
+ Motor   2 | Avg:   3.94 ms | Max:   4.29 ms | Samples:  291
+ Motor   3 | Avg:   3.93 ms | Max:   4.26 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.13 ms | Max:   3.45 ms | Samples:  290
+ Motor   5 | Avg:   3.79 ms | Max:   4.22 ms | Samples:  291
+ Motor   6 | Avg:   3.84 ms | Max:   4.26 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.12 ms | Max:   3.54 ms | Samples:  290
+ Motor   2 | Avg:   3.94 ms | Max:   4.25 ms | Samples:  289
+ Motor   3 | Avg:   3.92 ms | Max:   4.25 ms | Samples:  290
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.14 ms | Max:   3.54 ms | Samples:  290
+ Motor   5 | Avg:   3.84 ms | Max:   4.25 ms | Samples:  289
+ Motor   6 | Avg:   3.88 ms | Max:   4.25 ms | Samples:  290
+-------------------------------------------
+
+WebSocketメッセージ受信: {"command":"discard_data"}
+データ破棄要求を受信しました
+WebSocketメッセージ受信: {"command":"reset_robot"}
+ロボットリセット要求を受信しました
+ロボットリセット処理開始...
+制御タスク停止シグナル送信中...
+ロボット制御タスクの停止を待機中...
+ロボット制御ワーカー終了
+関節角度受信終了
+
+--- RobStride Latency Stats (/dev/ttyUSB3) ---
+ Motor   4 | Avg:   3.08 ms | Max:   3.43 ms | Samples:  238
+ Motor   5 | Avg:   3.77 ms | Max:   4.19 ms | Samples:  238
+ Motor   6 | Avg:   3.84 ms | Max:   4.29 ms | Samples:  238
+-------------------------------------------
+
+
+--- RobStride Latency Stats (/dev/ttyUSB2) ---
+ Motor   1 | Avg:   3.08 ms | Max:   3.42 ms | Samples:  239
+ Motor   2 | Avg:   3.93 ms | Max:   4.18 ms | Samples:  239
+ Motor   3 | Avg:   3.90 ms | Max:   4.21 ms | Samples:  239
+-------------------------------------------
+
+ホームポジション移動完了
+UDP受信スレッドとロボット制御タスクを再開中...
+UDP受信スレッドを再起動中...
+関節角度受信開始: ポート8082
+新しいロボット制御タスクを開始しました
+ロボットリセット処理完了
+ロボット制御ワーカー開始
