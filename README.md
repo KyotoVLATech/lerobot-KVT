@@ -137,9 +137,69 @@ CUDA_VISIBLE_DEVICES=0 bash scripts/model_docker.sh --model sarm run -- lerobot-
   --steps=5000 \
   --wandb.enable=true \
   --wandb.project=sarm \
-  --job_name=sarm-${iloha-dataset-good} \
+  --job_name=sarm-iloha-dataset-good \
   --policy.device=cuda \
   --policy.push_to_hub=false
 ```
 
 `DATASET_DIR`, `OUTPUT_DIR`, `CACHE_ROOT`, `IMAGE_NAME` を環境変数で指定すると、マウント先やイメージ名を変更できます。
+
+CUDA_VISIBLE_DEVICES=0 bash scripts/model_docker.sh --model sarm run -- python src/lerobot/policies/sarm/compute_rabc_weights.py \
+  --dataset-repo-id=local/iloha-dataset-fix \
+  --dataset-root=datasets/iloha-dataset-fix \
+  --reward-model-path outputs/train/sarm_single/checkpoints/005000 \
+  --visualize-only \
+  --num-visualizations 5 \
+  --head-mode sparse \
+  --output-dir ./sarm_viz
+
+- pi0.5学習 on Docker
+```bash
+CUDA_VISIBLE_DEVICES=0 bash scripts/model_docker.sh --model sarm run -- lerobot-train \
+  --policy.type=pi05 \
+  --dataset.repo_id=local/iloha-dataset-fix \
+  --dataset.root=datasets/iloha-dataset-fix \
+  --policy.use_relative_actions=true \
+  --policy.relative_exclude_joints='["joint_6", "joint_13"]'
+  --use_rabc=true \
+  --rabc_head_mode=sparse \
+  --rabc_kappa=0.01 \
+  --batch_size=32 \
+  --steps=40000 \
+  --job_name=pi05_rabc \
+  --policy.push_to_hub=false \
+  --wandb.enable=true \
+  --wandb.disable_artifact=true \
+  --dataset.video_backend=pyav \
+  --policy.device=cuda \
+  --policy.pretrained_path=lerobot/pi05_base \
+  --policy.gradient_checkpointing=true \
+  --policy.dtype=bfloat16
+```
+- ACT学習 on Docker
+```bash
+CUDA_VISIBLE_DEVICES=2 bash scripts/model_docker.sh --model sarm run -- lerobot-train --dataset.repo_id=local/iloha-dataset-good --dataset.root=datasets/iloha-dataset-good --policy.type=act --output_dir=outputs/train/act_iloha-dataset-good --job_name=act_iloha-dataset-good --policy.device=cuda --policy.push_to_hub=false --wandb.enable=true --wandb.disable_artifact=true --dataset.video_backend=pyav --batch_size=8 --steps=100000
+```
+-X-VLA学習 on Normal
+```bash
+uv run lerobot-train \
+  --policy.path="lerobot/xvla-folding" \
+  --dataset.repo_id=local/iloha-dataset-good \
+  --dataset.root=datasets/iloha-dataset-good \
+  --output_dir=outputs/train/xvla_iloha_folding \
+  --job_name=xvla_iloha_folding \
+  --policy.dtype=bfloat16 \
+  --policy.push_to_hub=false \
+  --wandb.enable=true \
+  --wandb.disable_artifact=true \
+  --dataset.video_backend=pyav \
+  --batch_size=8 \
+  --steps=20000 \
+  --policy.device=cuda \
+  --policy.action_mode=auto \
+  --policy.freeze_vision_encoder=false \
+  --policy.freeze_language_encoder=false \
+  --policy.train_policy_transformer=true \
+  --policy.train_soft_prompts=true \
+  --rename_map='{"observation.images.cam_high":"observation.images.image","observation.images.cam_left_wrist":"observation.images.image2","observation.images.cam_right_wrist":"observation.images.image3"}'
+```
