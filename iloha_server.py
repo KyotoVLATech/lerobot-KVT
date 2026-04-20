@@ -167,7 +167,7 @@ class RobotCommunicationNode:
                 features=dataset_features,
                 use_videos=True,
                 image_writer_processes=0,
-                streaming_encoding=True,
+                # streaming_encoding=True,
                 image_writer_threads=len(self.cameras),
                 video_backend="pyav",  # torchcodecのAV1デコード問題を回避
             )

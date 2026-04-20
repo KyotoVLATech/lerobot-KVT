@@ -71,3 +71,22 @@ uv run iloha_eval.py \
   --episode_time_s 45 \
   --num_episodes 1
 ```
+
+## データセット関連
+### データセットの修復
+- 壊れているか確認
+```bash
+uv run fix_dataset.py iloha-1 --check-only
+```
+- 壊れているファイルを修復（--no-backupで.bakバックアップなし）
+```bash
+uv run fix_dataset.py iloha-1
+```
+### 特定エピソードの削除
+```bash
+uv run lerobot-edit-dataset --repo_id local/iloha-11 --root datasets/iloha-11 --new_root datasets/iloha-11 --operation.type delete_episodes --operation.episode_indices "[9]"
+```
+### データセットのマージ
+```bash
+uv run merge_dataset_v30.py
+```
