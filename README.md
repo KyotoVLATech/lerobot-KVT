@@ -90,3 +90,56 @@ uv run lerobot-edit-dataset --repo_id local/iloha-11 --root datasets/iloha-11 --
 ```bash
 uv run merge_dataset_v30.py
 ```
+
+## モデル学習用 Docker
+Ubuntu 24.04 / Python 3.12 / uv の学習用 Dockerfile を `docker/Dockerfile.train` に追加しています。
+環境構築時のモデルオプションは `sarm`, `pi`, `xvla` の3つです。
+`sarm` と `pi` は同じ `pi-sarm` イメージとしてビルドされ、`xvla` は transformers 依存の衝突を避けやすいように別イメージとしてビルドされます。
+
+### イメージのビルド
+```bash
+bash scripts/model_docker.sh --model sarm build
+# pi も同じ pi-sarm イメージを使います
+bash scripts/model_docker.sh --model pi build
+
+# xvla は別イメージです
+bash scripts/model_docker.sh --model xvla build
+```
+
+### Hugging Face / W&B ログイン
+以下を一度実行すると、ログイン情報はホスト側の `.cache/model-docker/` 以下に保存されます。
+同じリポジトリでコンテナを作り直してもキャッシュは再利用されます。
+```bash
+bash scripts/model_docker.sh --model sarm login
+```
+
+### コンテナを開く
+```bash
+bash scripts/model_docker.sh --model sarm shell
+```
+
+コンテナ内ではリポジトリが `/workspace/lerobot` にマウントされます。
+`datasets/` と `outputs/` も同じ場所にマウントされるため、学習結果はホスト側にも残ります。
+
+### 任意コマンドの実行
+学習・評価コマンドは用途に応じて自由に指定してください。
+```bash
+CUDA_VISIBLE_DEVICES=0 bash scripts/model_docker.sh --model sarm run -- lerobot-info
+CUDA_VISIBLE_DEVICES=0 bash scripts/model_docker.sh --model sarm run -- lerobot-train \
+  --dataset.repo_id=local/iloha-dataset-good \
+  --dataset.root=datasets/iloha-dataset-good \
+  --dataset.video_backend=pyav \
+  --policy.type=sarm \
+  --policy.annotation_mode=single_stage \
+  --policy.image_key=observation.images.cam_high \
+  --output_dir=outputs/train/sarm_single \
+  --batch_size=32 \
+  --steps=5000 \
+  --wandb.enable=true \
+  --wandb.project=sarm \
+  --job_name=sarm-${iloha-dataset-good} \
+  --policy.device=cuda \
+  --policy.push_to_hub=false
+```
+
+`DATASET_DIR`, `OUTPUT_DIR`, `CACHE_ROOT`, `IMAGE_NAME` を環境変数で指定すると、マウント先やイメージ名を変更できます。

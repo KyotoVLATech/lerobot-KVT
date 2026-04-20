@@ -1,0 +1,71 @@
+ARG BASE_IMAGE=nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+FROM ${BASE_IMAGE}
+
+ARG PYTHON_VERSION=3.12
+ARG MODEL_EXTRAS="pi sarm"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HOME=/cache/home \
+    PYTHONUNBUFFERED=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/lerobot/.venv \
+    UV_LINK_MODE=copy \
+    PATH=/opt/lerobot/.venv/bin:/root/.local/bin:/usr/local/bin:${PATH} \
+    HF_HOME=/cache/huggingface \
+    HF_HUB_CACHE=/cache/huggingface/hub \
+    HF_LEROBOT_HOME=/cache/huggingface/lerobot \
+    WANDB_DIR=/cache/wandb \
+    WANDB_CACHE_DIR=/cache/wandb \
+    TORCH_HOME=/cache/torch \
+    TORCHINDUCTOR_CACHE_DIR=/cache/torch/inductor \
+    TRITON_CACHE_DIR=/cache/triton \
+    MUJOCO_GL=egl
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    cmake \
+    curl \
+    ffmpeg \
+    git \
+    libegl1 \
+    libegl1-mesa-dev \
+    libgeos-dev \
+    libglib2.0-0 \
+    libgl1 \
+    libusb-1.0-0-dev \
+    ninja-build \
+    pkg-config \
+    portaudio19-dev \
+    python${PYTHON_VERSION} \
+    python${PYTHON_VERSION}-dev \
+    python${PYTHON_VERSION}-venv \
+    speech-dispatcher \
+    sudo \
+    && export UV_INSTALL_DIR=/usr/local/bin \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -sf /usr/bin/python${PYTHON_VERSION} /usr/local/bin/python \
+    && ln -sf /usr/bin/python${PYTHON_VERSION} /usr/local/bin/python3 \
+    && mkdir -p /workspace/lerobot /opt/lerobot /cache/home /cache/huggingface /cache/wandb /cache/torch /cache/triton \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace/lerobot
+
+COPY setup.py pyproject.toml uv.lock README.md MANIFEST.in ./
+COPY src/ src/
+
+RUN extra_args=() \
+    && for extra in ${MODEL_EXTRAS}; do \
+      case "${extra}" in \
+        sarm|pi|xvla) extra_args+=(--extra "${extra}") ;; \
+        *) echo "MODEL_EXTRAS must contain only: sarm, pi, xvla" >&2; exit 1 ;; \
+      esac; \
+    done \
+    && uv sync --python python${PYTHON_VERSION} "${extra_args[@]}" --extra intelrealsense --extra dynamixel \
+    && chmod -R a+rwX /opt/lerobot
+
+COPY . .
+
+CMD ["/bin/bash"]
