@@ -64,14 +64,26 @@ uv run lerobot-train \
 ```
 
 - eval
+ACT
 ```bash
 uv run iloha_eval.py \
-  --policy_path outputs/train/act-kitcut-dataset/checkpoints/200000/pretrained_model \
-  --dataset_path datasets/kitcut-dataset \
-  --episode_time_s 45 \
-  --num_episodes 1
+    --policy_path outputs/train/act_iloha-dataset-good/checkpoints/100000/pretrained_model \
+    --dataset_path datasets/iloha-dataset-good \
+    --episode_time_s 30 \
+    --num_episodes 1 \
+    --save_data \
+    --disable_robot_relative_safety
 ```
-
+X-VLA
+```bash
+uv run --extra xvla iloha_eval.py \
+    --policy_path outputs/train/xvla_iloha-dataset-good/checkpoints/020000/pretrained_model \
+    --dataset_path datasets/iloha-dataset-good \
+    --episode_time_s 30 \
+    --num_episodes 1 \
+    --save_data \
+    --disable_robot_relative_safety
+```
 ## データセット関連
 ### データセットの修復
 - 壊れているか確認

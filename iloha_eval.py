@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-学習済みのPolicyを読み込んでIlohaロボットを動かすスクリプト
-
-使用例:
-python src/lerobot/my_aloha_eval.py \
-    --policy_path outputs/train/act-aloha-dataset-0/checkpoints/last/pretrained_model \
-    --dataset_path datasets/aloha-dataset-0 \
-    --episode_time_s 60 \
-    --num_episodes 1 \
-    --save_data
-"""
-
 import argparse
 import asyncio
+import importlib.util
+import json
 import time
 from pathlib import Path
 from typing import Optional
@@ -25,46 +15,43 @@ from lerobot.cameras import make_cameras_from_configs
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import build_dataset_frame
+from lerobot.datasets.feature_utils import build_dataset_frame
 from lerobot.datasets.video_utils import VideoEncodingManager
 from lerobot.utils.control_utils import predict_action
-from lerobot.utils.utils import get_safe_torch_device, init_logging
+from lerobot.utils.device_utils import get_safe_torch_device
+from lerobot.utils.utils import init_logging
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 from lerobot.processor.rename_processor import rename_stats
 from iloha_mapping import JOINT_NAMES, aloha_to_iloha, iloha_to_aloha
 
 
-# カメラ設定（my_aloha_server.pyと同じ）
+TASK = "Grab the edge of the towel and fold it twice."
+SUPPORTED_POLICY_TYPES = {"act", "xvla", "pi05"}
+CAMERA_MAX_FRAME_AGE_MS = 250
+CAM_HIGH_CROP_SIZE = (480, 640)  # height, width
+RELATIVE_WARMUP_SECONDS = 3.0
+ABSOLUTE_MODE_DELTA_THRESHOLD = 0.2  # rad
+
+# カメラ設定（iloha_server.pyと同じ）
 CAMERA_CONFIGS = {
-    "cam_high": {"serial_number_or_name": "029522250086", "width": 640, "height": 480, "fps": 30},
+    "cam_high": {"serial_number_or_name": "146222252104", "width": 1280, "height": 720, "fps": 30},
     "cam_left_wrist": {"serial_number_or_name": "341522301205", "width": 640, "height": 480, "fps": 30},
-    "cam_right_wrist": {"serial_number_or_name": "146222252104", "width": 640, "height": 480, "fps": 30}
+    "cam_right_wrist": {"serial_number_or_name": "029522250086", "width": 640, "height": 480, "fps": 30}
 }
 
 
 async def reset_robot_to_home(robot: Iloha, init=True):
     """
-    ロボットを初期位置に戻す（my_aloha_server.pyのhandle_reset_requestと同じロジック）
+    ロボットを初期位置に戻す（iloha_server.pyのhandle_reset_requestと同じロジック）
     """
     print("ロボットを初期位置に戻しています...")
-    
-    # 1. グリッパーを開く（0.0に設定）
+
     home_action = robot.old_action.copy()
-    if not init:
-        home_action[0] = 0.0
-        home_action[7] = 0.0
-        home_action[1] = -np.pi / 6
-        home_action[2] = -np.pi / 6
-        home_action[8] = -np.pi / 6
-        home_action[9] = -np.pi / 6
-        await robot.async_send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
-        await asyncio.sleep(1.0)
-    home_action[3:7] = 0.0   # 左グリッパー関連
-    home_action[10:14] = 0.0  # 右グリッパー関連
+    home_action[3:7] = 0.0
+    home_action[10:14] = 0.0
     await robot.async_send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
     await asyncio.sleep(2.0)
-    
-    # 2. 全関節を0に戻す
+
     home_action = np.zeros_like(home_action)
     await robot.async_send_action(home_action, use_relative=False, use_filter=False, use_unwrap=False)
     await asyncio.sleep(1.0)
@@ -84,7 +71,7 @@ def initialize_cameras() -> dict:
         for name, camera in cameras.items():
             print(f"{name} を接続中...")
             camera.connect(warmup=True)
-            time.sleep(0.2)
+            time.sleep(1.0)
         
         print(f"{len(cameras)}台のカメラを初期化しました")
         return cameras
@@ -110,6 +97,135 @@ def get_next_dataset_number(root: Path, prefix: str = "aloha-eval-") -> int:
     return max(existing_nums) + 1 if existing_nums else 0
 
 
+def load_model_config(policy_path: str) -> dict:
+    """pretrained_model/config.jsonを読み込み、ポリシー種別やrelative設定を確認する"""
+    config_path = Path(policy_path) / "config.json"
+    if not config_path.exists():
+        return {}
+    with config_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_preprocessor_rename_map(policy_path: str) -> dict[str, str]:
+    """保存済みpreprocessorから観測rename_mapを読み込む"""
+    preprocessor_path = Path(policy_path) / "policy_preprocessor.json"
+    if not preprocessor_path.exists():
+        return {}
+    with preprocessor_path.open("r", encoding="utf-8") as f:
+        preprocessor_config = json.load(f)
+
+    for step in preprocessor_config.get("steps", []):
+        if step.get("registry_name") == "rename_observations_processor":
+            return dict(step.get("config", {}).get("rename_map", {}))
+    return {}
+
+
+def crop_cam_high_for_dataset(image: np.ndarray) -> np.ndarray:
+    """cam_highの中央下部640x480をLeRobotDataset/Policy入力用に切り出す"""
+    crop_h, crop_w = CAM_HIGH_CROP_SIZE
+    height, width = image.shape[:2]
+    if height < crop_h or width < crop_w:
+        raise ValueError(
+            f"cam_high image is too small for {crop_w}x{crop_h} crop: got {width}x{height}"
+        )
+    top = height - crop_h
+    left = (width - crop_w) // 2
+    return np.ascontiguousarray(image[top:top + crop_h, left:left + crop_w])
+
+
+def read_camera_frame(camera) -> np.ndarray:
+    """最新フレーム取得を優先し、未準備時だけ同期readにフォールバックする"""
+    try:
+        return camera.read_latest(max_age_ms=CAMERA_MAX_FRAME_AGE_MS)
+    except Exception:
+        try:
+            return camera.async_read(timeout_ms=CAMERA_MAX_FRAME_AGE_MS)
+        except Exception:
+            return camera.read()
+
+
+def capture_observation(robot: Iloha, state_names: tuple[str, ...]) -> dict:
+    """iloha_server.pyと同じく、画像とrobot.old_action由来のALOHA状態を観測にする"""
+    obs = {}
+    for name, camera in robot.cameras.items():
+        obs[name] = read_camera_frame(camera)
+    if "cam_high" in obs:
+        obs["cam_high"] = crop_cam_high_for_dataset(obs["cam_high"])
+
+    aloha_state = iloha_to_aloha(robot.old_action)
+    for i, joint_name in enumerate(state_names):
+        obs[joint_name] = float(aloha_state[i])
+    return obs
+
+
+def action_tensor_to_aloha_array(action_tensor, action_names: tuple[str, ...]) -> np.ndarray:
+    """Policy出力をaction names順のALOHA座標numpy配列にそろえる"""
+    if isinstance(action_tensor, dict):
+        if all(name in action_tensor for name in action_names):
+            values = []
+            for name in action_names:
+                value = action_tensor[name]
+                if hasattr(value, "detach"):
+                    value = value.detach().float().cpu().numpy()
+                values.append(float(np.asarray(value).squeeze()))
+            return np.asarray(values, dtype=np.float32)
+
+        if "action" in action_tensor:
+            action_tensor = action_tensor["action"]
+        else:
+            raise KeyError(f"action dict does not contain expected keys: {list(action_tensor.keys())}")
+
+    if hasattr(action_tensor, "detach"):
+        action_array = action_tensor.detach().float().cpu().numpy()
+    else:
+        action_array = np.asarray(action_tensor)
+    action_array = np.asarray(action_array, dtype=np.float32).squeeze()
+    if action_array.ndim != 1:
+        raise ValueError(f"Expected 1D action after squeeze, got shape {action_array.shape}")
+    if action_array.shape[0] < len(action_names):
+        raise ValueError(f"Action has {action_array.shape[0]} dims, expected at least {len(action_names)}")
+    return action_array[:len(action_names)]
+
+
+def enable_pi05_relative_actions_if_needed(preprocessor, postprocessor, action_names: tuple[str, ...]) -> None:
+    """pi0.5のrelative action用processorを、モデルconfigに合わせて明示的に有効化する"""
+    from lerobot.processor.relative_action_processor import (
+        AbsoluteActionsProcessorStep,
+        RelativeActionsProcessorStep,
+    )
+
+    relative_step = next((s for s in preprocessor.steps if isinstance(s, RelativeActionsProcessorStep)), None)
+    if relative_step is None:
+        print("警告: pi0.5 relative actionが有効ですが、preprocessorにrelative stepがありません")
+        return
+
+    relative_step.enabled = True
+    relative_step.action_names = list(action_names)
+    absolute_step = next((s for s in postprocessor.steps if isinstance(s, AbsoluteActionsProcessorStep)), None)
+    if absolute_step is None:
+        print("警告: pi0.5 relative actionが有効ですが、postprocessorにabsolute stepがありません")
+        return
+    absolute_step.enabled = True
+    absolute_step.relative_step = relative_step
+
+
+def check_policy_dependencies(policy_type: str) -> None:
+    """Policyごとのoptional dependencyが無い場合、ハードウェア接続前に分かりやすく止める"""
+    missing = []
+    if policy_type == "xvla" and importlib.util.find_spec("transformers") is None:
+        missing.append("transformers")
+    if policy_type == "pi05" and importlib.util.find_spec("transformers") is None:
+        missing.append("transformers")
+
+    if missing:
+        extra = "xvla" if policy_type == "xvla" else "pi"
+        raise RuntimeError(
+            f"{policy_type} policy requires optional dependency: {', '.join(missing)}.\n"
+            f"Run with the matching extra, for example:\n"
+            f"  uv run --extra {extra} iloha_eval.py --policy_path ... --dataset_path ..."
+        )
+
+
 async def evaluation_loop(
     robot: Iloha,
     policy,
@@ -122,6 +238,9 @@ async def evaluation_loop(
     ds_features: dict,
     dataset: Optional[LeRobotDataset] = None,
     display_data: bool = False,
+    use_robot_relative_safety: bool = True,
+    relative_warmup_seconds: float = RELATIVE_WARMUP_SECONDS,
+    absolute_mode_delta_threshold: float = ABSOLUTE_MODE_DELTA_THRESHOLD,
 ):
     """
     評価ループ: ポリシーからアクションを予測してロボットを制御
@@ -140,18 +259,13 @@ async def evaluation_loop(
         elapsed = time.perf_counter() - start_episode_t
         if elapsed >= episode_time_s:
             print(f"エピソード時間（{episode_time_s}秒）に達しました")
-            break
+            return frame_count
         
-        # 1. ロボットから観測を取得
-        obs = robot.get_observation()
-        aloha_state = iloha_to_aloha([obs[name] for name in JOINT_NAMES])
-        obs_for_policy = {
-            **obs,
-            **{name: float(aloha_state[i]) for i, name in enumerate(state_names)},
-        }
+        # 1. サーバ実装に合わせて、最新画像とold_action由来のALOHA状態を取得
+        obs_for_policy = capture_observation(robot, state_names)
         
         if frame_count == 0:
-            print(f"観測データのキー: {list(obs.keys())}")
+            print(f"観測データのキー: {list(obs_for_policy.keys())}")
         
         # 2. データセット形式のフレームを構築
         observation_frame = build_dataset_frame(
@@ -176,16 +290,11 @@ async def evaluation_loop(
                 robot_type=robot.name,
             )
             
-            # 4. Tensorをnumpy配列に変換し、バッチ次元を削除
-            if isinstance(action_tensor, dict):
-                # 辞書形式の場合（一部のポリシー）
-                action_array_aloha = np.array([action_tensor[name] for name in action_names], dtype=np.float32)
-                action_values = {name: float(action_array_aloha[i]) for i, name in enumerate(action_names)}
-            else:
-                # Tensor形式の場合
-                action_array_aloha = action_tensor.squeeze(0).cpu().numpy()  # (1, 14) -> (14,)
-                # 辞書形式に変換（後の処理のため）
-                action_values = {name: float(action_array_aloha[i]) for i, name in enumerate(action_names)}
+            # 4. Tensor/dictをnumpy配列に変換し、ALOHA座標からIloha送信座標へ変換
+            action_array_aloha = action_tensor_to_aloha_array(action_tensor, action_names)
+            predicted_action_values = {
+                name: float(action_array_aloha[i]) for i, name in enumerate(action_names)
+            }
             action_array_iloha = aloha_to_iloha(action_array_aloha)
             
             if frame_count == 0:
@@ -197,16 +306,30 @@ async def evaluation_loop(
             print(f"アクション予測エラー: {e}")
             import traceback
             traceback.print_exc()
-            break
+            return frame_count
         
-        # 6. ロボットにアクションを送信
-        await robot.async_send_action(action_array_iloha)
+        # 6. ロボットにアクションを送信。初動と急変時はiloha_server.pyと同じ安全側の相対制限を使う
+        previous_action = robot.old_action.copy()
+        delta_from_previous = np.abs(action_array_iloha - previous_action)
+        max_delta = float(np.max(delta_from_previous))
+        use_relative = use_robot_relative_safety and (
+            elapsed < relative_warmup_seconds or max_delta > absolute_mode_delta_threshold
+        )
+        await robot.async_send_action(
+            action_array_iloha,
+            use_relative=use_relative,
+            use_filter=not use_relative,
+        )
+        actual_action_aloha = iloha_to_aloha(robot.old_action)
+        actual_action_values = {
+            name: float(actual_action_aloha[i]) for i, name in enumerate(action_names)
+        }
         
         # 7. データセットに保存（オプション）
         if dataset is not None:
             action_frame = build_dataset_frame(
                 ds_features, 
-                action_values,
+                actual_action_values,
                 prefix="action"
             )
             frame = {**observation_frame, **action_frame, "task": task}
@@ -214,7 +337,7 @@ async def evaluation_loop(
         
         # 8. 可視化（オプション）
         if display_data:
-            log_rerun_data(observation=obs_for_policy, action=action_values)
+            log_rerun_data(observation=obs_for_policy, action=predicted_action_values)
         
         frame_count += 1
         if frame_count % 30 == 0:
@@ -227,25 +350,82 @@ async def evaluation_loop(
             await asyncio.sleep(sleep_duration)
     
     print(f"評価ループ終了（合計{frame_count}フレーム）")
+    return frame_count
 
 
 async def main(args):
     init_logging()
+
+    # 1. ポリシーとプロセッサの読み込み
+    # 依存関係エラーをロボット・カメラ接続前に検出する
+    print("=" * 60)
+    print(f"ポリシーを読み込み中: {args.policy_path}")
+
+    print(f"データセット読み込み中: {args.dataset_path}")
+    dataset_for_stats = LeRobotDataset(args.dataset_path, root=args.dataset_path)
+
+    model_config = load_model_config(args.policy_path)
+    policy_cfg = PreTrainedConfig.from_pretrained(args.policy_path)
+    policy_cfg.pretrained_path = args.policy_path
+    policy_cfg.device = "cuda" if args.device == "cuda" else "cpu"
+
+    policy_type = str(model_config.get("type", policy_cfg.type)).lower()
+    if policy_type == "pi0.5":
+        policy_type = "pi05"
+    if policy_type not in SUPPORTED_POLICY_TYPES:
+        raise ValueError(
+            f"未対応のPolicy typeです: {policy_type}. "
+            f"対応: {', '.join(sorted(SUPPORTED_POLICY_TYPES))}"
+        )
+    check_policy_dependencies(policy_type)
+    if policy_type == "pi05":
+        relative_enabled = bool(
+            model_config.get("use_relative_actions", getattr(policy_cfg, "use_relative_actions", False))
+        )
+        policy_cfg.use_relative_actions = relative_enabled
+        print(f"pi0.5 relative action: {'enabled' if relative_enabled else 'disabled'}")
+    print(f"Policy type: {policy_type}")
+
+    rename_map = load_preprocessor_rename_map(args.policy_path)
+    if rename_map:
+        print(f"Rename map: {rename_map}")
+
+    policy = make_policy(policy_cfg, ds_meta=dataset_for_stats.meta, rename_map=rename_map)
+
+    preprocessor, postprocessor = make_pre_post_processors(
+        policy_cfg=policy_cfg,
+        pretrained_path=args.policy_path,
+        dataset_stats=rename_stats(dataset_for_stats.meta.stats, {}),
+        preprocessor_overrides={
+            "device_processor": {"device": policy_cfg.device},
+            "rename_observations_processor": {"rename_map": rename_map},
+        },
+    )
+    if policy_type == "pi05" and getattr(policy_cfg, "use_relative_actions", False):
+        enable_pi05_relative_actions_if_needed(
+            preprocessor,
+            postprocessor,
+            tuple(dataset_for_stats.features["action"]["names"]),
+        )
+
+    device = get_safe_torch_device(policy_cfg.device)
+    print(f"ポリシー読み込み完了（デバイス: {device}）")
     
-    # 1. ロボットの初期化と接続
+    # 2. ロボットの初期化と接続
     print("=" * 60)
     print("ロボットを初期化中...")
     config = IlohaConfig(
-        right_dynamixel_port="/dev/ttyUSB1",
-        right_robstride_port="/dev/ttyUSB0",
-        left_robstride_port="/dev/ttyUSB2",
-        left_dynamixel_port="/dev/ttyUSB3",
+        left_robstride_port="/dev/ttyUSB3",
+        left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
+        right_robstride_port="/dev/ttyUSB2",
+        right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
         max_relative_target_1=0.03,
         max_relative_target_2=0.01,
         max_relative_target_3=0.01,
         max_relative_target_4=0.03,
         max_relative_target_5=0.01,
         max_relative_target_6=0.03,
+        current_limit_robstride={1: 4.0, 2: 16.0, 3: 4.0, 4: 4.0, 5: 16.0, 6: 4.0},
         current_limit_gripper_R=0.3,
         current_limit_gripper_L=0.3,
     )
@@ -253,10 +433,10 @@ async def main(args):
     await robot.connect()
     print("ロボット接続完了")
     
-    # 2. 初期位置に戻す
+    # 3. 初期位置に戻す
     await reset_robot_to_home(robot)
     
-    # 3. カメラの初期化
+    # 4. カメラの初期化
     print("=" * 60)
     print("カメラを初期化中...")
     cameras = initialize_cameras()
@@ -265,35 +445,6 @@ async def main(args):
         await robot.disconnect()
         return
     robot.cameras = cameras
-    
-    # 4. ポリシーとプロセッサの読み込み
-    print("=" * 60)
-    print(f"ポリシーを読み込み中: {args.policy_path}")
-    
-    # データセットからメタデータとstatsを読み込み
-    print(f"データセット読み込み中: {args.dataset_path}")
-    dataset_for_stats = LeRobotDataset(args.dataset_path, root=args.dataset_path)
-    
-    # ポリシー設定を読み込み
-    policy_cfg = PreTrainedConfig.from_pretrained(args.policy_path)
-    policy_cfg.pretrained_path = args.policy_path
-    policy_cfg.device = "cuda" if args.device == "cuda" else "cpu"
-    
-    # ポリシーを作成
-    policy = make_policy(policy_cfg, ds_meta=dataset_for_stats.meta)
-    
-    # プロセッサを作成
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=policy_cfg,
-        pretrained_path=args.policy_path,
-        dataset_stats=rename_stats(dataset_for_stats.meta.stats, {}),
-        preprocessor_overrides={
-            "device_processor": {"device": policy_cfg.device},
-        },
-    )
-    
-    device = get_safe_torch_device(policy_cfg.device)
-    print(f"ポリシー読み込み完了（デバイス: {device}）")
     
     # 5. データセットの作成（保存する場合）
     dataset = None
@@ -329,7 +480,7 @@ async def main(args):
             features=dataset_features,
             use_videos=True,
             image_writer_processes=0,
-            image_writer_threads=4 * len(cameras),
+            image_writer_threads=len(cameras),
             video_backend="pyav",
         )
         
@@ -356,7 +507,7 @@ async def main(args):
             postprocessor.reset()
             
             # 評価ループを実行
-            await evaluation_loop(
+            frame_count = await evaluation_loop(
                 robot=robot,
                 policy=policy,
                 preprocessor=preprocessor,
@@ -368,12 +519,18 @@ async def main(args):
                 ds_features=dataset_for_stats.features,
                 dataset=dataset,
                 display_data=args.display_data,
+                use_robot_relative_safety=not args.disable_robot_relative_safety,
+                relative_warmup_seconds=args.relative_warmup_seconds,
+                absolute_mode_delta_threshold=args.absolute_mode_delta_threshold,
             )
             
             # エピソードを保存
             if dataset is not None:
-                dataset.save_episode()
-                print(f"エピソード {episode_idx + 1} を保存しました")
+                if frame_count > 0:
+                    dataset.save_episode()
+                    print(f"エピソード {episode_idx + 1} を保存しました")
+                else:
+                    print(f"エピソード {episode_idx + 1} は0フレームのため保存をスキップしました")
             
             # 次のエピソードのためにロボットを初期位置に戻す
             if episode_idx < args.num_episodes - 1:
@@ -439,8 +596,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_root",
         type=str,
-        default="datasets",
-        help="保存先ルートディレクトリ（デフォルト: datasets）"
+        default="datasets/eval",
+        help="保存先ルートディレクトリ（デフォルト: datasets/eval）"
     )
     parser.add_argument(
         "--save_data",
@@ -473,8 +630,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--task",
         type=str,
-        default="do something",
-        help="タスク名（デフォルト: do something）"
+        default=TASK,
+        help=f"タスク指示文（デフォルト: {TASK}）"
     )
     parser.add_argument(
         "--device",
@@ -483,16 +640,25 @@ if __name__ == "__main__":
         choices=["cuda", "cpu"],
         help="推論デバイス（デフォルト: cuda）"
     )
+    parser.add_argument(
+        "--disable_robot_relative_safety",
+        action="store_true",
+        help="初動・急変時のIloha相対制限安全制御を無効にする"
+    )
+    parser.add_argument(
+        "--relative_warmup_seconds",
+        type=float,
+        default=RELATIVE_WARMUP_SECONDS,
+        help=f"初回アクションから相対制限を強制する秒数（デフォルト: {RELATIVE_WARMUP_SECONDS}）"
+    )
+    parser.add_argument(
+        "--absolute_mode_delta_threshold",
+        type=float,
+        default=ABSOLUTE_MODE_DELTA_THRESHOLD,
+        help=f"相対制限を維持する最大差分しきい値rad（デフォルト: {ABSOLUTE_MODE_DELTA_THRESHOLD}）"
+    )
     
     args = parser.parse_args()
     
     # 非同期でメイン関数を実行
     asyncio.run(main(args))
-
-# 使用例:
-# uv run src/lerobot/my_aloha_eval.py \
-#     --policy_path outputs/train/act-aloha-dataset-0/checkpoints/last/pretrained_model \
-#     --dataset_path datasets/aloha-dataset-0 \
-#     --episode_time_s 60 \
-#     --num_episodes 1 \
-#     --save_data

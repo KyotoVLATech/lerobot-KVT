@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from lerobot.robots.iloha import Iloha, IlohaConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import build_dataset_frame
+from lerobot.datasets.feature_utils import build_dataset_frame
 from lerobot.datasets.video_utils import VideoEncodingManager
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.cameras import make_cameras_from_configs
@@ -30,9 +30,9 @@ class RobotCommunicationNode:
     CAM_HIGH_CROP_SIZE = (480, 640)  # height, width
     # カメラ設定
     CAMERA_CONFIGS = {
-        "cam_high": {"serial_number_or_name": "029522250086", "width": 1280, "height": 720, "fps": 30},
+        "cam_high": {"serial_number_or_name": "146222252104", "width": 1280, "height": 720, "fps": 30},
         "cam_left_wrist": {"serial_number_or_name": "341522301205", "width": 640, "height": 480, "fps": 30},
-        "cam_right_wrist": {"serial_number_or_name": "146222252104", "width": 640, "height": 480, "fps": 30}
+        "cam_right_wrist": {"serial_number_or_name": "029522250086", "width": 640, "height": 480, "fps": 30}
     }
 
     def __init__(self):
