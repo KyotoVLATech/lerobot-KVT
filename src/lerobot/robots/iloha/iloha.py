@@ -131,6 +131,7 @@ class Iloha():
             final_action = self.filtered_joint_angles
         else:
             final_action = limited_action
+            self.filtered_joint_angles = final_action.copy()
         
         # 4. ndarray を AlohaArm に変換（update_pos 用）
         final_action_L = AlohaArm(

@@ -40,10 +40,6 @@ uv run lerobot-find-cameras realsense
 ```bash
 uv run iloha_server.py
 ```
-- データセットのマージ
-```bash
-uv run merge_dataset_v30.py
-```
 - train
 ```bash
 export DATASET_NAME=aloha-dataset-1
@@ -77,12 +73,12 @@ uv run iloha_eval.py \
 X-VLA
 ```bash
 uv run --extra xvla iloha_eval.py \
-    --policy_path outputs/train/xvla_iloha-dataset-good/checkpoints/020000/pretrained_model \
-    --dataset_path datasets/iloha-dataset-good \
-    --episode_time_s 30 \
-    --num_episodes 1 \
+    --policy_path outputs/train/xvla_iloha-dataset-253/checkpoints/060000/pretrained_model \
+    --dataset_path datasets/iloha-dataset-253 \
+    --episode_time_s 20 \
+    --num_episodes 2 \
     --save_data \
-    --disable_robot_relative_safety
+    --task "Grab the edge of the towel and fold it twice. Quality: High"
 ```
 ## データセット関連
 ### データセットの修復
@@ -97,6 +93,27 @@ uv run fix_dataset.py iloha-1
 ### 特定エピソードの削除
 ```bash
 uv run lerobot-edit-dataset --repo_id local/iloha-11 --root datasets/iloha-11 --new_root datasets/iloha-11 --operation.type delete_episodes --operation.episode_indices "[9]"
+```
+### タスク指示書き換え
+- 一括変更
+```bash
+uv run change_task.py iloha-dataset-200 \
+  --mode all \
+  --new-task "Grab the edge of the towel and fold it twice. Quality: High"
+```
+- エピソード単位
+```bash
+uv run change_task.py iloha-dataset-good \
+  --mode episode \
+  --episodes "0,2,5-8" \
+  --new-task "Fold the towel twice from the edge."
+```
+- タスク単位
+```bash
+uv run change_task.py iloha-dataset-good \
+  --mode task \
+  --from-task-index 0 \
+  --new-task "Fold the towel twice from the edge."
 ```
 ### データセットのマージ
 ```bash

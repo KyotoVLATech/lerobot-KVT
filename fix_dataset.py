@@ -17,7 +17,8 @@ from lerobot.datasets.compute_stats import (
     get_feature_stats,
     sample_indices,
 )
-from lerobot.datasets.utils import flatten_dict, write_info, write_stats
+from lerobot.datasets.io_utils import write_info, write_stats
+from lerobot.datasets.utils import flatten_dict
 from lerobot.datasets.video_utils import encode_video_frames
 
 

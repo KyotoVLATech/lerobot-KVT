@@ -16,6 +16,7 @@ class MergeConfig:
     name_list: list[str]
     merged_name: str
     video_files_size_in_mb: Optional[float] = None
+    overwrite_output: bool = True
 
 
 CODEC_FAMILIES = {
@@ -179,6 +180,30 @@ def ensure_video_codecs_match(datasets: list[LeRobotDataset]) -> None:
                 )
 
 
+def estimate_single_file_video_limit_in_mb(datasets: list[LeRobotDataset]) -> float:
+    """Return a video file size limit large enough to keep each camera in one MP4."""
+    size_by_key: dict[str, float] = {}
+
+    for dataset in datasets:
+        for video_key in dataset.meta.video_keys:
+            size_by_key.setdefault(video_key, 0.0)
+            for video_path in referenced_video_paths(dataset, video_key):
+                size_by_key[video_key] += video_path.stat().st_size / (1024**2)
+
+    if not size_by_key:
+        return 0.0
+
+    largest_video_key = max(size_by_key, key=size_by_key.get)
+    largest_size = size_by_key[largest_video_key]
+    margin = max(1.0, largest_size * 0.01)
+    limit = largest_size + margin
+    print(
+        f"[VIDEO LIMIT] largest stream={largest_video_key} "
+        f"estimated={largest_size:.1f}MB limit={limit:.1f}MB"
+    )
+    return limit
+
+
 def main(cfg: MergeConfig) -> None:
     dataset_root = "datasets"
     dataset_path = [Path(dataset_root) / name for name in cfg.name_list]
@@ -190,9 +215,17 @@ def main(cfg: MergeConfig) -> None:
     ensure_video_codecs_match(datasets)
 
     output_dir = Path(dataset_root) / cfg.merged_name
+    if output_dir.exists():
+        if not cfg.overwrite_output:
+            raise FileExistsError(f"Output dataset already exists: {output_dir}")
+        shutil.rmtree(output_dir)
+
     aggregate_kwargs = {}
-    if cfg.video_files_size_in_mb is not None:
-        aggregate_kwargs["video_files_size_in_mb"] = cfg.video_files_size_in_mb
+    aggregate_kwargs["video_files_size_in_mb"] = (
+        cfg.video_files_size_in_mb
+        if cfg.video_files_size_in_mb is not None
+        else estimate_single_file_video_limit_in_mb(datasets)
+    )
 
     aggregate_datasets(
         repo_ids=[dataset.repo_id for dataset in datasets],
@@ -204,6 +237,6 @@ def main(cfg: MergeConfig) -> None:
 
 if __name__ == "__main__":
     main(MergeConfig(
-        name_list=["iloha-1", "iloha-2", "iloha-3", "iloha-4", "iloha-5", "iloha-6", "iloha-7", "iloha-9", "iloha-10", "iloha-11"],
-        merged_name="iloha-dataset-all"
+        name_list=["iloha-dataset-200", "iloha-dataset-4"],
+        merged_name="iloha-dataset-253"
     ))
