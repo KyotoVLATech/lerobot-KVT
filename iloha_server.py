@@ -412,7 +412,7 @@ class RobotCommunicationNode:
 
         obs = self._capture_latest_observation()
         obs["cam_high"] = self._crop_cam_high_for_dataset(obs["cam_high"])
-        action_joint_state = iloha_to_aloha(latest_action)
+        action_joint_state = iloha_to_aloha(self.robot.old_action) # この実装で正しい。latest_actionなどを入れないように。
         action_data = {joint_name: float(action_joint_state[i]) for i, joint_name in enumerate(JOINT_NAMES)}
         observation_frame = build_dataset_frame(
             ds_features, obs, prefix="observation"
