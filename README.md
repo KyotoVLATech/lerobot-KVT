@@ -73,12 +73,20 @@ uv run iloha_eval.py \
 X-VLA
 ```bash
 uv run --extra xvla iloha_eval.py \
-    --policy_path outputs/train/xvla_iloha-dataset-253/checkpoints/060000/pretrained_model \
-    --dataset_path datasets/iloha-dataset-253 \
+    --policy_path outputs/train/xvla_iloha-dataset-all/checkpoints/100000/pretrained_model \
+    --dataset_path datasets/iloha-dataset-all \
     --episode_time_s 20 \
-    --num_episodes 2 \
-    --save_data \
+    --num_episodes 1 \
     --task "Grab the edge of the towel and fold it twice. Quality: High"
+```
+pi0.5（動かない）
+```bash
+uv run --extra xvla iloha_eval.py \
+    --policy_path outputs/train/pi05_iloha-dataset-fix/checkpoints/020000/pretrained_model \
+    --dataset_path datasets/iloha-dataset-fix \
+    --episode_time_s 30 \
+    --num_episodes 1 \
+    --save_data
 ```
 ## データセット関連
 ### データセットの修復
@@ -97,7 +105,7 @@ uv run lerobot-edit-dataset --repo_id local/iloha-11 --root datasets/iloha-11 --
 ### タスク指示書き換え
 - 一括変更
 ```bash
-uv run change_task.py iloha-dataset-200 \
+uv run change_task.py iloha-dataset-success \
   --mode all \
   --new-task "Grab the edge of the towel and fold it twice. Quality: High"
 ```

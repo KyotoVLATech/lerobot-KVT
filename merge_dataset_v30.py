@@ -237,6 +237,10 @@ def main(cfg: MergeConfig) -> None:
 
 if __name__ == "__main__":
     main(MergeConfig(
-        name_list=["iloha-dataset-200", "iloha-dataset-4"],
-        merged_name="iloha-dataset-253"
+        name_list=[
+            "iloha-dataset-all",
+            "iloha-dataset-soso",
+            "iloha-dataset-success",
+        ],
+        merged_name="iloha-dataset-sushi"
     ))
