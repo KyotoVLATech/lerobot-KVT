@@ -3,7 +3,7 @@
 ```bash
 git clone -b dev/sushi --recursive https://github.com/KyotoVLATech/lerobot-KVT.git
 cd lerobot-KVT
-uv sync --extra intelrealsense --extra dynamixel
+uv sync --extra iloha
 uv pip uninstall torch torchvision
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```

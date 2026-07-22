@@ -15,9 +15,9 @@ from lerobot.cameras import make_cameras_from_configs
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.feature_utils import build_dataset_frame
+from lerobot.utils.feature_utils import build_dataset_frame
 from lerobot.datasets.video_utils import VideoEncodingManager
-from lerobot.utils.control_utils import predict_action
+from lerobot.common.control_utils import predict_action
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.utils import init_logging
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data

@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from lerobot.robots.iloha import Iloha, IlohaConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.feature_utils import build_dataset_frame
+from lerobot.utils.feature_utils import build_dataset_frame
 from lerobot.datasets.video_utils import VideoEncodingManager
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.cameras import make_cameras_from_configs
