@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import asyncio
-import websockets
-import socket
 import json
+import socket
 import struct
 import threading
-import numpy as np
-from typing import Optional
 import time
 from pathlib import Path
-from lerobot.robots.iloha import Iloha, IlohaConfig
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.utils.feature_utils import build_dataset_frame
-from lerobot.datasets.video_utils import VideoEncodingManager
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
-from lerobot.cameras import make_cameras_from_configs
+from typing import Optional
+
+import numpy as np
+import websockets
+
+from iloha_camera_utils import (
+    DEPTH_KEY_SUFFIX,
+    capture_camera_observation,
+    make_camera_dataset_features,
+)
 from iloha_mapping import JOINT_NAMES, iloha_to_aloha
+from lerobot.cameras import make_cameras_from_configs
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.video_utils import VideoEncodingManager
+from lerobot.robots.iloha import Iloha, IlohaConfig
+from lerobot.utils.feature_utils import build_dataset_frame
 
 # TASK = "do something"
 TASK = "Grab the edge of the towel and fold it twice."
@@ -32,9 +39,27 @@ class RobotCommunicationNode:
     RECORDING_STOP_TIMEOUT_S = 5.0
     # カメラ設定
     CAMERA_CONFIGS = {
-        "cam_high": {"serial_number_or_name": "146222252104", "width": 1280, "height": 720, "fps": 30},
-        "cam_left_wrist": {"serial_number_or_name": "341522301205", "width": 640, "height": 480, "fps": 30},
-        "cam_right_wrist": {"serial_number_or_name": "029522250086", "width": 640, "height": 480, "fps": 30}
+        "cam_high": {
+            "serial_number_or_name": "146222252104",
+            "width": 1280,
+            "height": 720,
+            "fps": 30,
+            "use_depth": True,
+        },
+        "cam_left_wrist": {
+            "serial_number_or_name": "341522301205",
+            "width": 640,
+            "height": 480,
+            "fps": 30,
+            "use_depth": True,
+        },
+        "cam_right_wrist": {
+            "serial_number_or_name": "029522250086",
+            "width": 640,
+            "height": 480,
+            "fps": 30,
+            "use_depth": True,
+        },
     }
 
     def __init__(self):
@@ -166,12 +191,13 @@ class RobotCommunicationNode:
                 "observation.state": {"dtype": "float32", "shape": (14,), "names": JOINT_NAMES},
                 "action": {"dtype": "float32", "shape": (14,), "names": JOINT_NAMES},
             }
-            for key in self.CAMERA_CONFIGS.keys():
-                dataset_features[f"observation.images.{key}"] = {
-                    "dtype": "video",
-                    "shape": (480, 640, 3),
-                    "names": ("height", "width", "channels")
-                }
+            dataset_features.update(
+                make_camera_dataset_features(
+                    self.CAMERA_CONFIGS,
+                    height=self.CAM_HIGH_CROP_SIZE[0],
+                    width=self.CAM_HIGH_CROP_SIZE[1],
+                )
+            )
             with self.dataset_lock:
                 self.current_dataset = LeRobotDataset.create(
                     repo_id,
@@ -182,7 +208,10 @@ class RobotCommunicationNode:
                     use_videos=True,
                     image_writer_processes=0,
                     # streaming_encoding=True,
-                    image_writer_threads=len(self.cameras),
+                    image_writer_threads=sum(
+                        feature["dtype"] in ("image", "video")
+                        for feature in dataset_features.values()
+                    ),
                     video_backend="pyav",  # torchcodecのAV1デコード問題を回避
                 )
                 self.video_encoding_manager = VideoEncodingManager(self.current_dataset)
@@ -369,18 +398,8 @@ class RobotCommunicationNode:
         if self.robot is None:
             raise RuntimeError("ロボットが初期化されていません")
 
-        obs = {}
+        obs = capture_camera_observation(self.cameras, self.CAMERA_MAX_FRAME_AGE_MS)
         joint_state = iloha_to_aloha(self.robot.old_action)
-        for name, camera in self.cameras.items():
-            try:
-                obs[name] = camera.read_latest(max_age_ms=self.CAMERA_MAX_FRAME_AGE_MS)
-            except Exception:
-                try:
-                    # 最新フレームがまだ無い場合のみ、新規フレーム待ちにフォールバックする
-                    obs[name] = camera.async_read(timeout_ms=self.CAMERA_MAX_FRAME_AGE_MS)
-                except TimeoutError:
-                    print(f"{name} の新規フレーム取得がタイムアウトしました。同期readにフォールバックします。")
-                    obs[name] = camera.read()
         for i, joint_name in enumerate(JOINT_NAMES):
             obs[joint_name] = joint_state[i]
         return obs
@@ -412,6 +431,8 @@ class RobotCommunicationNode:
 
         obs = self._capture_latest_observation()
         obs["cam_high"] = self._crop_cam_high_for_dataset(obs["cam_high"])
+        cam_high_depth_key = f"cam_high{DEPTH_KEY_SUFFIX}"
+        obs[cam_high_depth_key] = self._crop_cam_high_for_dataset(obs[cam_high_depth_key])
         action_joint_state = iloha_to_aloha(self.robot.old_action) # この実装で正しい。latest_actionなどを入れないように。
         action_data = {joint_name: float(action_joint_state[i]) for i, joint_name in enumerate(JOINT_NAMES)}
         observation_frame = build_dataset_frame(

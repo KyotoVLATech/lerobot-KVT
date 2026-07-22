@@ -7,23 +7,28 @@ import json
 import time
 from pathlib import Path
 from typing import Optional
+
 import numpy as np
 
-from lerobot.robots.iloha import Iloha, IlohaConfig
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+from iloha_camera_utils import (
+    DEPTH_KEY_SUFFIX,
+    capture_camera_observation,
+    make_camera_dataset_features,
+)
+from iloha_mapping import JOINT_NAMES, aloha_to_iloha, iloha_to_aloha
 from lerobot.cameras import make_cameras_from_configs
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.policies.factory import make_policy, make_pre_post_processors
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.utils.feature_utils import build_dataset_frame
-from lerobot.datasets.video_utils import VideoEncodingManager
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.common.control_utils import predict_action
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.video_utils import VideoEncodingManager
+from lerobot.policies.factory import make_policy, make_pre_post_processors
+from lerobot.processor.rename_processor import rename_stats
+from lerobot.robots.iloha import Iloha, IlohaConfig
 from lerobot.utils.device_utils import get_safe_torch_device
+from lerobot.utils.feature_utils import build_dataset_frame
 from lerobot.utils.utils import init_logging
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
-from lerobot.processor.rename_processor import rename_stats
-from iloha_mapping import JOINT_NAMES, aloha_to_iloha, iloha_to_aloha
-
 
 TASK = "Grab the edge of the towel and fold it twice."
 SUPPORTED_POLICY_TYPES = {"act", "xvla", "pi05"}
@@ -35,9 +40,27 @@ STANDBY_MOTOR_DISABLE_DELAY_SECONDS = 3.0
 
 # カメラ設定（iloha_server.pyと同じ）
 CAMERA_CONFIGS = {
-    "cam_high": {"serial_number_or_name": "146222252104", "width": 1280, "height": 720, "fps": 30},
-    "cam_left_wrist": {"serial_number_or_name": "341522301205", "width": 640, "height": 480, "fps": 30},
-    "cam_right_wrist": {"serial_number_or_name": "029522250086", "width": 640, "height": 480, "fps": 30}
+    "cam_high": {
+        "serial_number_or_name": "146222252104",
+        "width": 1280,
+        "height": 720,
+        "fps": 30,
+        "use_depth": True,
+    },
+    "cam_left_wrist": {
+        "serial_number_or_name": "341522301205",
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "use_depth": True,
+    },
+    "cam_right_wrist": {
+        "serial_number_or_name": "029522250086",
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "use_depth": True,
+    },
 }
 
 
@@ -211,24 +234,14 @@ def crop_cam_high_for_dataset(image: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(image[top:top + crop_h, left:left + crop_w])
 
 
-def read_camera_frame(camera) -> np.ndarray:
-    """最新フレーム取得を優先し、未準備時だけ同期readにフォールバックする"""
-    try:
-        return camera.read_latest(max_age_ms=CAMERA_MAX_FRAME_AGE_MS)
-    except Exception:
-        try:
-            return camera.async_read(timeout_ms=CAMERA_MAX_FRAME_AGE_MS)
-        except Exception:
-            return camera.read()
-
-
 def capture_observation(robot: Iloha, state_names: tuple[str, ...]) -> dict:
-    """iloha_server.pyと同じく、画像とrobot.old_action由来のALOHA状態を観測にする"""
-    obs = {}
-    for name, camera in robot.cameras.items():
-        obs[name] = read_camera_frame(camera)
+    """iloha_server.pyと同じく、RGB・深度画像とold_action由来のALOHA状態を観測にする"""
+    obs = capture_camera_observation(robot.cameras, CAMERA_MAX_FRAME_AGE_MS)
     if "cam_high" in obs:
         obs["cam_high"] = crop_cam_high_for_dataset(obs["cam_high"])
+    cam_high_depth_key = f"cam_high{DEPTH_KEY_SUFFIX}"
+    if cam_high_depth_key in obs:
+        obs[cam_high_depth_key] = crop_cam_high_for_dataset(obs[cam_high_depth_key])
 
     aloha_state = iloha_to_aloha(robot.old_action)
     for i, joint_name in enumerate(state_names):
@@ -405,12 +418,17 @@ async def evaluation_loop(
         
         # 7. データセットに保存（オプション）
         if dataset is not None:
-            action_frame = build_dataset_frame(
-                ds_features, 
-                actual_action_values,
-                prefix="action"
+            recording_observation_frame = build_dataset_frame(
+                dataset.features,
+                obs_for_policy,
+                prefix="observation",
             )
-            frame = {**observation_frame, **action_frame, "task": task}
+            action_frame = build_dataset_frame(
+                dataset.features,
+                actual_action_values,
+                prefix="action",
+            )
+            frame = {**recording_observation_frame, **action_frame, "task": task}
             dataset.add_frame(frame)
         
         # 8. 可視化（オプション）
@@ -543,12 +561,13 @@ async def main(args):
             "observation.state": {"dtype": "float32", "shape": (14,), "names": JOINT_NAMES},
             "action": {"dtype": "float32", "shape": (14,), "names": JOINT_NAMES},
         }
-        for key in CAMERA_CONFIGS.keys():
-            dataset_features[f"observation.images.{key}"] = {
-                "dtype": "video",
-                "shape": (480, 640, 3),
-                "names": ("height", "width", "channels")
-            }
+        dataset_features.update(
+            make_camera_dataset_features(
+                CAMERA_CONFIGS,
+                height=CAM_HIGH_CROP_SIZE[0],
+                width=CAM_HIGH_CROP_SIZE[1],
+            )
+        )
         
         dataset = LeRobotDataset.create(
             repo_id,
@@ -558,7 +577,9 @@ async def main(args):
             features=dataset_features,
             use_videos=True,
             image_writer_processes=0,
-            image_writer_threads=len(cameras),
+            image_writer_threads=sum(
+                feature["dtype"] in ("image", "video") for feature in dataset_features.values()
+            ),
             video_backend="pyav",
         )
         

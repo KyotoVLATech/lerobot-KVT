@@ -1,8 +1,11 @@
-from lerobot.robots.iloha.config_iloha import IlohaConfig
-import numpy as np
-from typing import Any
 import asyncio
-from .iloha_controller.aloha_controller import AlohaController, AlohaArm
+from typing import Any
+
+import numpy as np
+
+from lerobot.robots.iloha.config_iloha import IlohaConfig
+
+from .iloha_controller.aloha_controller import AlohaArm, AlohaController
 
 JOINT_NAMES = [f"joint_{i}" for i in range(14)]
 
@@ -36,8 +39,11 @@ class Iloha():
         """
         features = {}
         # カメラ画像の特徴 - データセット形式では (height, width, channels)
-        for name in self.cameras.keys():
-            features[name] = (480, 640, 3)
+        for name, camera in self.cameras.items():
+            if getattr(camera, "use_rgb", True):
+                features[name] = (480, 640, 3)
+            if getattr(camera, "use_depth", False):
+                features[f"{name}_depth"] = (480, 640, 1)
         # 関節角度の特徴 - 状態ベクトルとして定義
         for joint_name in JOINT_NAMES:
             features[joint_name] = float
@@ -57,12 +63,15 @@ class Iloha():
     def get_observation(self) -> dict[str, Any]:
         """
         現在の観測データを取得
-        - カメラ画像: そのまま（H, W, C形式で取得、データセット保存時に適切に処理される）
+        - カメラ画像: RGBと有効な深度をH, W, C形式で取得
         - 関節角度: "state"という単一のキーで14要素のベクトルとして返す
         """
         obs = {}
         for name, camera in self.cameras.items():
-            obs[name] = camera.read()
+            if getattr(camera, "use_rgb", True):
+                obs[name] = camera.read_latest()
+            if getattr(camera, "use_depth", False):
+                obs[f"{name}_depth"] = camera.read_latest_depth()
         for i, joint_name in enumerate(JOINT_NAMES):
             obs[joint_name] = self.old_action[i]
         return obs
