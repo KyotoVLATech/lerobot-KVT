@@ -203,6 +203,7 @@ intelrealsense = [
 ]
 iloha = [
     "lerobot[core_scripts]",
+    "lerobot[training]",
     "lerobot[intelrealsense]",
     "lerobot[dynamixel]",
     "websockets>=15.0.1,<16.0.0",

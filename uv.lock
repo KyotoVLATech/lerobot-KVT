@@ -3080,6 +3080,7 @@ hopejr = [
     { name = "pyserial" },
 ]
 iloha = [
+    { name = "accelerate" },
     { name = "av" },
     { name = "contourpy" },
     { name = "datasets" },
@@ -3098,6 +3099,7 @@ iloha = [
     { name = "pyserial-asyncio" },
     { name = "rerun-sdk" },
     { name = "torchcodec", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or sys_platform == 'win32'" },
+    { name = "wandb" },
     { name = "websockets" },
 ]
 intelrealsense = [
@@ -3452,6 +3454,7 @@ requires-dist = [
     { name = "lerobot", extras = ["timm-dep"], marker = "extra == 'groot'" },
     { name = "lerobot", extras = ["topreward"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["training"], marker = "extra == 'all'" },
+    { name = "lerobot", extras = ["training"], marker = "extra == 'iloha'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'annotations'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'eo1'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'evo1'" },
