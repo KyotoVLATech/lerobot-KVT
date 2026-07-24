@@ -6,24 +6,16 @@ import struct
 import time
 from asyncio import Lock
 from dataclasses import dataclass
-from logging import Formatter, StreamHandler, getLogger
 from typing import Any, List, Optional, Union
 
 import serial_asyncio
 
 from .constants import CommandType, FaultCode, MotorStatus, ParameterIndex, RunMode
 
-# Improved logger configuration
-logger = getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # デバッグ設定: Trueにすると各制御サイクルで電圧のみを個別に読み取り、コンソールに表示します
 DEBUG_VBUS_EVERY_CYCLE = False  # Trueにするとサイクルごとにバス負荷が2倍になるので通常はFalse
-logger.setLevel(logging.ERROR)
-handler_format = Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-stream_handler = StreamHandler()
-stream_handler.setLevel(logging.ERROR)
-stream_handler.setFormatter(handler_format)
-logger.addHandler(stream_handler)
 
 
 @dataclass
@@ -77,7 +69,7 @@ class RobStrideController:
         baudrate: int = 921600,
         host_id: int = 253,
         log_timeout_errors: bool = True,
-        log_latency_stats: bool = True,
+        log_latency_stats: bool = False,
     ):
         self.port = port
         self.baudrate = baudrate
@@ -156,16 +148,14 @@ class RobStrideController:
                 logger.error(f"[Motor {motor_id}] Error during serial I/O: {e}")
                 return None
             finally:
-                # 診断用統計の記録
-                end_time = time.perf_counter()
-                latency_ms = (end_time - start_time) * 1000
-                
-                self._latencies[motor_id].append(latency_ms)
+                if self.log_latency_stats:
+                    end_time = time.perf_counter()
+                    latency_ms = (end_time - start_time) * 1000
+                    self._latencies[motor_id].append(latency_ms)
 
-                # 5秒おきに統計を表示
-                if self.log_latency_stats and end_time - self._last_print_time > 5.0:
-                    self._print_latency_stats()
-                    self._last_print_time = end_time
+                    if end_time - self._last_print_time > 5.0:
+                        self._print_latency_stats()
+                        self._last_print_time = end_time
 
             if response and response.startswith(b'AT') and response.endswith(b'\r\n'):
                 # logger.debug(f"Received valid response: {response.hex(' ')}")
@@ -699,8 +689,6 @@ class RobStrideController:
             motor_id, ParameterIndex.LOC_REF.value, target_pos_rad
         )
         if result is None:
-            # Trigger diagnostic dump on failure
-            await self.log_motor_diagnostics(motor_id, reason="Communication Error / Timeout")
             logger.error(f"Failed to send target position to motor {motor_id}")
         return result
 

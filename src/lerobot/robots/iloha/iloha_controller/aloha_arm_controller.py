@@ -21,6 +21,9 @@ DYNAMIXEL_PULSES_PER_REVOLUTION = 4096
 DYNAMIXEL_CURRENT_MA_PER_UNIT = 2.69
 DYNAMIXEL_MAX_CURRENT_MA = 1193.0
 DYNAMIXEL_NUM_RETRY = 3
+# 一括読取りの再試行は1回に限定し、制御書込みを長時間待たせずに
+# 一時的なUSBシリアル/Status Packet欠落から回復する。
+DYNAMIXEL_RUNTIME_READ_NUM_RETRY = 1
 ROBSTRIDE_NUM_RETRY = 3
 INITIAL_MOVE_MONITOR_PERIOD_S = 0.1
 INITIAL_MOVE_MIN_DURATION_S = 2.0
@@ -181,7 +184,10 @@ class AlohaArmController:
             # RobStrideコントローラー初期化
             print("  RobStrideコントローラー接続中...")
             self.robstride_controller = RobStrideController(
-                port=self.robstride_port, motors=self.robstride_motors
+                port=self.robstride_port,
+                motors=self.robstride_motors,
+                log_timeout_errors=False,
+                log_latency_stats=False,
             )
 
             # Dynamixelコントローラー初期化
@@ -338,6 +344,37 @@ class AlohaArmController:
                 ) from last_error
 
         return values
+
+    def _sync_read_dynamixel_registers(self, data_name: str) -> dict[str, int]:
+        """実時間制御向けに、全Dynamixelを短時間で一括読取りする。"""
+        assert self.dynamixel_controller is not None
+        bus = self.dynamixel_controller
+        last_error: Exception | None = None
+
+        for attempt in range(1 + DYNAMIXEL_RUNTIME_READ_NUM_RETRY):
+            try:
+                if attempt:
+                    # Dynamixel SDKのclearPort()はpyserial.flush()であり、
+                    # 受信バッファを破棄しない。再試行時は明示的にRXを掃除する。
+                    serial_port = getattr(getattr(bus, "port_handler", None), "ser", None)
+                    reset_input_buffer = getattr(serial_port, "reset_input_buffer", None)
+                    if callable(reset_input_buffer):
+                        reset_input_buffer()
+                return {
+                    motor_name: int(value)
+                    for motor_name, value in bus.sync_read(
+                        data_name,
+                        normalize=False,
+                        num_retry=0,
+                    ).items()
+                }
+            except (ConnectionError, RuntimeError) as error:
+                last_error = error
+
+        raise ConnectionError(
+            f"Dynamixelの{data_name}一括読取りに失敗しました "
+            f"(port={self.dynamixel_port}, attempts={1 + DYNAMIXEL_RUNTIME_READ_NUM_RETRY})"
+        ) from last_error
 
     async def _setup_robstride_motors(self) -> None:
         """現在位置を目標へ同期してからRobStrideモーターを有効化する。"""
@@ -603,13 +640,18 @@ class AlohaArmController:
                 logical_position,
                 reference,
             )
-            result = await self.robstride_controller.set_target_position(
-                motor_id,
-                wire_position,
-            )
+            result = None
+            for _ in range(1 + ROBSTRIDE_NUM_RETRY):
+                result = await self.robstride_controller.set_target_position(
+                    motor_id,
+                    wire_position,
+                )
+                if result is not None:
+                    break
             if result is None:
                 raise ConnectionError(
-                    f"RobStride Motor{motor_id} 位置指令送信失敗"
+                    f"RobStride Motor{motor_id} 位置指令送信失敗 "
+                    f"(attempts={1 + ROBSTRIDE_NUM_RETRY})"
                 )
             self._robstride_target_references[motor_id] = wire_position
 
@@ -688,7 +730,7 @@ class AlohaArmController:
 
         async with self._dynamixel_lock:
             raw_positions = await asyncio.to_thread(
-                self._read_dynamixel_registers,
+                self._sync_read_dynamixel_registers,
                 "Present_Position",
             )
 

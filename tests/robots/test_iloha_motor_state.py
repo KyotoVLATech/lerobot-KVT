@@ -1,5 +1,6 @@
 import asyncio
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -53,16 +54,30 @@ class FakeRobstrideController:
         return self.positions[motor_id]
 
 
+class TransientFailingRobstrideController:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def set_target_position(self, motor_id: int, position: float) -> bytes | None:
+        self.calls += 1
+        if self.calls == 1:
+            return None
+        return b"ok"
+
+
 class FakeDynamixelBus:
     def __init__(self, positions: dict[str, int]) -> None:
         self.positions = positions
         self.motors = dict.fromkeys(positions)
         self.writes = []
+        self.sync_read_calls = 0
+        self.individual_read_calls = 0
 
     def sync_read(self, data_name: str, *, normalize: bool, num_retry: int):
         assert data_name == "Present_Position"
         assert normalize is False
-        assert num_retry == 3
+        assert num_retry == 0
+        self.sync_read_calls += 1
         return self.positions.copy()
 
     def read(
@@ -76,6 +91,7 @@ class FakeDynamixelBus:
         assert data_name == "Present_Position"
         assert normalize is False
         assert num_retry == 0
+        self.individual_read_calls += 1
         return self.positions[motor_name]
 
     def sync_write(
@@ -101,9 +117,34 @@ class FakeDynamixelBus:
         self.writes.append((data_name, motor, value, normalize, num_retry))
 
 
+class FakeSerialPort:
+    def __init__(self) -> None:
+        self.reset_input_buffer_calls = 0
+
+    def reset_input_buffer(self) -> None:
+        self.reset_input_buffer_calls += 1
+
+
+class FailingDynamixelBus(FakeDynamixelBus):
+    def __init__(self, positions: dict[str, int], failures_before_success: int) -> None:
+        super().__init__(positions)
+        self.failures_before_success = failures_before_success
+        self.serial_port = FakeSerialPort()
+        self.port_handler = SimpleNamespace(ser=self.serial_port)
+
+    def sync_read(self, data_name: str, *, normalize: bool, num_retry: int):
+        assert data_name == "Present_Position"
+        assert normalize is False
+        assert num_retry == 0
+        self.sync_read_calls += 1
+        if self.sync_read_calls <= self.failures_before_success:
+            raise ConnectionError("temporary status packet loss")
+        return self.positions.copy()
+
+
 class FakeDynamixelInitializationBus(FakeDynamixelBus):
     def __init__(self, motors, operating_modes) -> None:
-        super().__init__({motor_name: 2048 for motor_name in motors})
+        super().__init__(dict.fromkeys(motors, 2048))
         self.motors = motors
         self.operating_modes = operating_modes
         self.model_number_table = {
@@ -340,12 +381,53 @@ def test_arm_controller_reads_real_positions_from_both_motor_buses() -> None:
         "motor6": 2048 + 512,
         "motor7": 2048 - 512,
     }
-    controller.dynamixel_controller = FakeDynamixelBus(pulse_positions)
+    bus = FakeDynamixelBus(pulse_positions)
+    controller.dynamixel_controller = bus
 
     actual = asyncio.run(controller.get_pos()).get_positions()
 
     assert actual[:3] == pytest.approx([0.1, 0.2, 0.3])
     assert actual[3:] == pytest.approx([math.pi / 2, -math.pi / 2, math.pi / 4, -math.pi / 4])
+    assert bus.sync_read_calls == 1
+    assert bus.individual_read_calls == 0
+
+
+def test_arm_controller_retries_dynamixel_sync_read_after_resetting_input_buffer() -> None:
+    controller = make_arm_controller()
+    positions = {
+        "motor4": 2048,
+        "motor5": 2049,
+        "motor6": 2050,
+        "motor7": 2051,
+    }
+    bus = FailingDynamixelBus(positions, failures_before_success=1)
+    controller.dynamixel_controller = bus
+
+    actual = controller._sync_read_dynamixel_registers("Present_Position")
+
+    assert actual == positions
+    assert bus.sync_read_calls == 2
+    assert bus.serial_port.reset_input_buffer_calls == 1
+
+
+def test_arm_controller_reports_dynamixel_port_after_retry_exhaustion() -> None:
+    controller = make_arm_controller()
+    bus = FailingDynamixelBus(
+        {
+            "motor4": 2048,
+            "motor5": 2049,
+            "motor6": 2050,
+            "motor7": 2051,
+        },
+        failures_before_success=2,
+    )
+    controller.dynamixel_controller = bus
+
+    with pytest.raises(ConnectionError, match=r"port=dynamixel, attempts=2"):
+        controller._sync_read_dynamixel_registers("Present_Position")
+
+    assert bus.sync_read_calls == 2
+    assert bus.serial_port.reset_input_buffer_calls == 1
 
 
 def test_robstride_positions_are_wrapped_at_two_pi() -> None:
@@ -375,8 +457,8 @@ def test_robstride_binary_response_can_contain_crlf_in_payload() -> None:
     controller = RobStrideController(
         port="robstride",
         motors=[RobStride(id=1, offset=0.0)],
-        log_latency_stats=False,
     )
+    assert controller.log_latency_stats is False
     response = b"AT" + b"\x00\x00\x00\r\n" + b"\x00" * 8 + b"\r\n"
     assert len(response) == 17
     reader = FakeFixedLengthReader(b"\r\n" + response)
@@ -389,6 +471,7 @@ def test_robstride_binary_response_can_contain_crlf_in_payload() -> None:
 
     assert actual == response
     assert reader.readexactly_sizes == [1, 1, 1, 1, 15]
+    assert not controller._latencies
 
 
 def test_robstride_pp_initialization_seeds_current_target_before_enable() -> None:
@@ -449,6 +532,17 @@ def test_robstride_targets_use_nearest_two_pi_equivalent() -> None:
             ("target", 3, 0.0),
         ]
     )
+
+
+def test_robstride_target_write_retries_transient_failure() -> None:
+    controller = make_arm_controller()
+    fake = TransientFailingRobstrideController()
+    controller.robstride_controller = fake
+
+    asyncio.run(controller._set_robstride_positions({1: 0.25}))
+
+    assert fake.calls == 2
+    assert controller._robstride_target_references[1] == pytest.approx(0.25)
 
 
 def test_initial_move_detects_motor_moving_away_from_origin() -> None:

@@ -1,0 +1,6 @@
+Wed Oct 16 11:46:47 2024
+ERROR: Offscreen framebuffer is not complete, error 0x8cdd
+
+Wed Oct 16 11:47:10 2024
+ERROR: Offscreen framebuffer is not complete, error 0x8cdd
+

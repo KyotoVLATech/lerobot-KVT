@@ -14,8 +14,22 @@ from .iloha_controller.robstride_port_detection import resolve_robstride_ports
 
 JOINT_NAMES = [f"joint_{i}" for i in range(14)]
 STATE_POLL_FREQUENCY_HZ = 10.0
+STATE_POLL_WARNING_INTERVAL_S = 10.0
 
 logger = logging.getLogger(__name__)
+
+
+class MeasuredStateError(RuntimeError):
+    """Base error for an unavailable measured motor state."""
+
+
+class MeasuredStateUnavailableError(MeasuredStateError):
+    """Raised before the first measured motor state is available."""
+
+
+class StaleMeasuredStateError(MeasuredStateError):
+    """Raised when the cached measured motor state is too old."""
+
 
 class Iloha:
     config_class = IlohaConfig
@@ -43,6 +57,8 @@ class Iloha:
         self._measured_state_timestamp: float | None = time.monotonic() if self.debug else None
         self._measured_state_lock = threading.Lock()
         self._state_polling_task: asyncio.Task | None = None
+        self._last_state_poll_warning_at = float("-inf")
+        self._consecutive_state_poll_failures = 0
 
     @property
     def observation_features(self) -> dict:
@@ -150,10 +166,10 @@ class Iloha:
             timestamp = self._measured_state_timestamp
 
         if measured_state is None or timestamp is None:
-            raise RuntimeError("Measured motor state is not available yet")
+            raise MeasuredStateUnavailableError("Measured motor state is not available yet")
         age_s = time.monotonic() - timestamp
         if max_age_s is not None and age_s > max_age_s:
-            raise RuntimeError(f"Measured motor state is stale: age={age_s * 1000:.1f} ms")
+            raise StaleMeasuredStateError(f"Measured motor state is stale: age={age_s * 1000:.1f} ms")
         return measured_state
 
     async def _state_polling_loop(self) -> None:
@@ -162,10 +178,24 @@ class Iloha:
             started_at = time.monotonic()
             try:
                 await self.refresh_measured_state()
+                if self._consecutive_state_poll_failures:
+                    logger.info(
+                        "Motor state polling recovered after %d consecutive failure(s).",
+                        self._consecutive_state_poll_failures,
+                    )
+                    self._consecutive_state_poll_failures = 0
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("Failed to refresh measured iLoHA state: %s", exc)
+                self._consecutive_state_poll_failures += 1
+                now = time.monotonic()
+                if now - self._last_state_poll_warning_at >= STATE_POLL_WARNING_INTERVAL_S:
+                    logger.warning(
+                        "Motor state polling failed (%d consecutive); keeping the last measured state: %s",
+                        self._consecutive_state_poll_failures,
+                        exc,
+                    )
+                    self._last_state_poll_warning_at = now
 
             sleep_s = period_s - (time.monotonic() - started_at)
             if sleep_s > 0:

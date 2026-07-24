@@ -1,0 +1,517 @@
+defaults:
+  - task: adroit_hammer
+
+name: train_dp3
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "debug"
+horizon: 5
+n_obs_steps: 2
+n_action_steps: 4
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+use_action_embed: True
+use_conv_action_embed: False
+conv_hidden_dims: [128, 256]
+conv_latent_cz: 32
+conv_kernel_size: 5
+conv_n_groups: 8
+action_recon_beta: 0.5
+no_pre_action: True
+ft_all_actions: True
+eval: False
+offline: False
+online: False
+num_train_timesteps: 100
+num_inference_steps: 10
+flow_inference_steps: 10
+flow_distill_inference_steps: 1    # student inference steps for flow distillation
+flow_distill_teacher_steps: 10     # teacher inference steps for flow distillation
+flow_sde_type: 'cps'
+flow_noise_level: 0.7
+flow_sde_window_size: 0  # 0 = all stochastic; k > 0 = first k steps stochastic, rest deterministic ODE
+flow_sigma_safe_max: 0.9  # fixed clamp on sigma in SDE branch to avoid singularity at sigma=1
+flow_logit_normal_sampling: False  # optional: use logit-normal t sampling for faster BC convergence
+flow_noise_on_final_step: False  # whether to inject noise on the last denoising step
+flow_cps_logprob_mode: 'gaussian'  # "pseudo" (Plan A: scaled MSE) or "gaussian" (Plan B: true Gaussian log-prob)
+clip_std_min: 0.0067
+clip_std_max: null
+action_norm: True
+env_num: ${task.env_runner.env_num}
+only_bc: False
+offline_use_aug: True
+update_phase: 'step'
+distill_loss_type: 'action_same_noise'
+distill2mean: False
+extractor_name: "smallpn"
+distill_phase: null  # set to 'after_dp'/'after_offline'/'online' for flow distillation
+wandb: True
+load_path: 'best'
+eval_stage: 'dp3'
+load_bc: False
+use_wandb: True
+data_collect: False
+off2off: False
+off2off_no_bc: False
+accelerate: False
+dynamics_type: 'diffusion'
+predict_r: False
+offline_cp_timestamp: null
+offline_cp_timestep: null
+chunk_as_single_action: True
+chunk_adv_clip: null
+offline_chunk_ratio_mode: scalar
+offline_chunk_adv_mode: scalar_iql
+chunk_vdelta_gae_n_rollout: 3
+chunk_vdelta_gae_lambda: 0.95
+chunk_vdelta_gae_chunk_source: repeat_first
+use_pre_norm: False
+gamma: 0.99
+kl_annealing: True
+bppo_chunk_level_ratio: True
+policy:
+  _target_: rl_100.policy.rl100_3d.RL1003D
+  use_point_crop: true
+  condition_type: film
+  use_down_condition: true
+  use_mid_condition: true
+  use_up_condition: true
+  joint_opt_encoder: False
+  policy_layer_norm: True
+  backbone: null
+  integrate_strategy: 'concat'
+  model: 'mlp'
+  act: 'relu'
+  encoder_type: 'dp3'
+  point_downsample: true
+  diffusion_step_embed_dim: 256
+  mlp_policy_depth: 3
+  chunk_as_single_action: ${chunk_as_single_action}
+  down_dims:
+  - 256
+  - 512
+  - 1024
+  crop_shape:
+  - 80
+  - 80
+  encoder_output_dim: 64
+  horizon: ${horizon}
+  kernel_size: 5
+  n_action_steps: ${n_action_steps}
+  n_groups: 8
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: ${num_inference_steps}
+  scheduler_type: 'flow'
+  img_shape: [3, 84, 84]
+  use_agent_pos: true
+  use_vib: true
+  use_recon: true
+  beta_kl: 0.001
+  eta: 1.0
+
+  # Flow matching scheduler
+  flow_noise_scheduler:
+    _target_: rl_100.unidpg.diffusion_policy.diffusers_patch.flow_match_scheduler.FlowMatchSchedulerExtended
+    num_train_timesteps: ${num_train_timesteps}
+    sde_type: ${flow_sde_type}
+    noise_level: ${flow_noise_level}
+    num_inference_steps: ${flow_inference_steps}
+    clip_std_min: ${clip_std_min}
+    clip_std_max: ${clip_std_max}
+    sigma_safe_max: ${flow_sigma_safe_max}
+
+  flow_inference_steps: ${flow_inference_steps}
+  flow_distill_inference_steps: ${flow_distill_inference_steps}
+  flow_distill_teacher_steps: ${flow_distill_teacher_steps}
+  flow_sde_type: ${flow_sde_type}
+  flow_noise_level: ${flow_noise_level}
+  flow_sde_window_size: ${flow_sde_window_size}
+  flow_sigma_safe_max: ${flow_sigma_safe_max}
+  flow_logit_normal_sampling: ${flow_logit_normal_sampling}
+  flow_noise_on_final_step: ${flow_noise_on_final_step}
+  flow_cps_logprob_mode: ${flow_cps_logprob_mode}
+
+  # Keep DDIM/CM schedulers (required by constructor, won't be used in flow mode)
+  cm_noise_scheduler:
+    _target_: rl_100.unidpg.diffusion_policy.diffusers_patch.lcm_scheduler.LCMSchedulerExtended
+    num_train_timesteps: ${num_train_timesteps}
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 1
+    prediction_type: sample
+    original_inference_steps: ${num_inference_steps}
+    clip_std_min: ${clip_std_min}
+    clip_std_max: ${clip_std_max}
+
+  ddim_noise_scheduler:
+    _target_: rl_100.unidpg.diffusion_policy.diffusers_patch.ddim_with_logprob_dpok.DDIMSchedulerExtended
+    num_train_timesteps: ${num_train_timesteps}
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 1
+    prediction_type: epsilon
+    clip_std_min: ${clip_std_min}
+    clip_std_max: ${clip_std_max}
+
+  obs_as_global_cond: true
+  shape_meta: ${shape_meta}
+
+  use_pc_color: False
+  pointnet_type: "pointnet"
+
+
+  idp3_pointcloud_encoder_cfg:
+    in_channels: 3
+    out_channels: ${policy.encoder_output_dim}
+    use_layernorm: true
+    final_norm: layernorm
+    normal_channel: false
+    num_points: 512
+
+
+  pointcloud_encoder_cfg:
+    in_channels: 3
+    out_channels: ${policy.encoder_output_dim}
+    use_layernorm: true
+    final_norm: layernorm
+    normal_channel: False
+
+
+lddm:
+  _target_: rl_100.policy.lddm.LDDM
+  shape_meta: ${shape_meta}
+  scheduler_type: 'ddim'
+  num_inference_steps: ${num_inference_steps}
+  condition_type: film
+  use_down_condition: true
+  use_mid_condition: true
+  use_up_condition: true
+  policy_layer_norm: True
+  model: 'skipnet'
+  act: 'relu'
+  point_downsample: true
+  diffusion_step_embed_dim: 256
+  mlp_policy_depth: 2
+  n_action_steps: ${n_action_steps}
+  chunk_as_single_action: ${chunk_as_single_action}
+  down_dims:
+  - 512
+  - 1024
+  - 2048
+  encoder_output_dim: 128
+  kernel_size: 5
+  n_groups: 8
+  use_action_embed: ${use_action_embed}
+  predict_r: ${predict_r}
+  action_embed_dim: null
+  action_embed_layer_norm: ${dynamics.action_embed_layer_norm}
+  cm_noise_scheduler:
+    _target_: rl_100.unidpg.diffusion_policy.diffusers_patch.lcm_scheduler.LCMSchedulerExtended
+    num_train_timesteps: ${num_train_timesteps}
+    beta_start: 0.00085
+    beta_end: 0.012
+    beta_schedule: scaled_linear
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
+    prediction_type: epsilon
+    original_inference_steps: ${num_inference_steps}
+    clip_std_min: ${clip_std_min}
+    clip_std_max: ${clip_std_max}
+  ddim_noise_scheduler:
+    _target_: rl_100.unidpg.diffusion_policy.diffusers_patch.ddim_with_logprob_dpok.DDIMSchedulerExtended
+    num_train_timesteps: ${num_train_timesteps}
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 1
+    prediction_type: sample
+    clip_std_min: ${clip_std_min}
+    clip_std_max: ${clip_std_max}
+ema:
+  _target_: rl_100.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 256
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+
+val_dataloader:
+  batch_size: 512
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.4e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  gpu_id: 0
+  seed: 42
+  debug: False
+  resume: True
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 3000
+  num_critic_epochs: 400
+  gradient_accumulate_every: 1
+  use_ema: True
+  rollout_every: 50
+  checkpoint_every: 50
+  val_every: 1
+  sample_every: 5
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+  max_grad_norm: 1.0
+  ema_decay: 0.95
+
+
+logging:
+  group: ${exp_name}
+  id: null
+  mode: online
+  name: ${training.seed}
+  project: ${name}+${task_name}
+  resume: False
+  tags:
+  - ft-dp3
+  - flow
+
+checkpoint:
+  save_ckpt: False
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 1
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${task.name}/${training.seed}/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${task.name}/${training.seed}/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${task.name}/${training.seed}/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}
+
+critic:
+  q_hidden_dim: 512
+  q_depth: 2
+  q_lr: 1.4e-4
+  target_update_freq: 2
+  tau: 0.005
+  gamma: ${gamma}
+  v_hidden_dim: 512
+  v_depth: 2
+  v_lr: 1.4e-4
+  omega: 0.7
+  q_layer_norm: false
+  action_embed_layer_norm: false
+  action_scale_norm: false
+  is_double_q: True
+  is_iql: True
+  is_share_encoder: true
+  fix_encoder: true
+  resume: True
+  load_pretrain: True
+
+unio4:
+  bppo_steps: 8000
+  bppo_lr: 1.0e-5
+  clip_ratio: 0.25
+  entropy_weight: 0.0
+  decay: 0.96
+  omega: 0.7
+  is_clip_decay: true
+  is_bppo_lr_decay: False
+  is_update_old_policy: True
+  is_linear_decay: True
+  bppo_batch_size: 512
+  temperature: null
+  eval_step: 50
+  eval_freq: 1000
+  ratio_strategy: 'sum'
+  top_k: 1
+  fix_encoder: true
+  rollout_length: 20
+  use_gae: false
+  first_action: false
+  use_ema_eval: false
+  idql_eval: True
+  eval_times: 1
+  finetune_batch_size: 512
+  final_reward: True
+
+dynamics:
+  gamma: ${gamma}
+  action_embed_layer_norm: false
+  action_scale_norm: false
+  tau: 0.005
+  alpha: 0.1
+  auto_alpha: True
+  target_entropy: null
+  alpha_lr: 3.0e-5
+  deterministic_backup: True
+  max_q_backup: True
+  norm_reward: True
+  num_q_ensemble: 10
+  dynamics_lr: 5.0e-4
+  dynamics_max_epochs: 250
+  max_epochs_since_update: 50
+  dynamics_hidden_dims: [400, 400, 400, 400]
+  dynamics_weight_decay: [2.5e-5, 5.0e-5, 7.5e-5, 7.5e-5, 1.0e-4]
+  n_ensemble: 7
+  n_elites: 5
+  rollout_freq: 1000
+  rollout_batch_size: 50000
+  rollout_length: 20
+  penalty-coef: 1.0
+  num_samples: 10
+  model_retain_epochs: 5
+  real_ratio: 0.05
+  load_dynamics_path: null
+  epoch: 200
+  step_per_epoch: 1000
+  eval_episodes: 10
+  batch_size: 256
+  lr_scheduler: False
+  penalty_coef: 0.5
+  predict_delta: True
+  first_action: False
+  fix_encoder: True
+  tqdm_interval_sec: 1.0
+  prediction_mode: "last"
+  use_true_ensemble: True
+ppo:
+  env_name: ${task.name}
+  seed: ${training.seed}
+  max_train_steps: 3000000
+  evaluate_freq: 20000
+  save_freq: 20
+  enable_ratio_logging: true
+  ratio_log_every_updates: 10
+  ratio_plot_on_final_flush: true
+  batch_size: 2048
+  mini_batch_size: 128
+  gpu: ${training.device}
+  path: null
+  v_hidden_width: 512
+  v_depth: 3
+  lr_bc: 1.0e-4
+  lr_a: 3.0e-6
+  lr_c: 3.0e-4
+  gamma: ${gamma}
+  lamda: 0.95
+  epsilon: 0.2
+  K_epochs: 10
+  use_adv_norm: true
+  use_state_norm: true
+  use_reward_norm: false
+  use_reward_scaling: true
+  entropy_coef: 0.01
+  use_lr_decay: true
+  use_grad_clip: true
+  use_orthogonal_init: true
+  set_adam_eps: true
+  use_tanh: true
+  is_from_bppo: false
+  is_load_value: false
+  pi_load_path: pi_
+  v_load_path: null
+  r_scale: 1.0
+  is_clip_value: true
+  is_decay_pi: false
+  tau: 0.005
+  std_upper_bound: 0.0
+  is_dp: true
+  T: 5
+  beta_schedule: vp
+  is_timesteps: false
+  num_inference_steps: ${num_inference_steps}
+  ratio: 5
+  ratio_strategy: sum
+  top_k: 1
+  iterations: 50
+  update_distribution: false
+  bc_in_loop: false
+  update_strategy: model
+  critic_strategy: iql
+  eta: 1.0
+  fix_encoder: False
+  idql_eval: false
+  use_bc: false
+  share_encoder: false
+  capacity: 10000
+  iql_ft: false
+  ft_q_lr: 1.0e-4
+  ft_v_lr: 1.0e-4
+  scale_strategy: null
+  num_critic_epochs: 500
+  encoder_lr_scale: 1.0
+  actor_grad: true
+  online_start_training:  1
+  clip_std_decay: false
+  adaptive_kl: 0.02
+  min_lr_actor: 5.0e-7
+  max_lr_actor: 1.0e-5
+  min_lr_critic: 1.0e-4
+  max_lr_critic: 1.0e-3
+  iql_steps: 10
+  idql_batch_size: 256
+  iql_omega: 0.7
+  fix_iql_encoder: True
+  iql_use_policy_encoder_features: False
+  iql_q_encoder: False
+  iql_v_encoder: False
+  v_encoder: False
+  load_online_cp: False
+  save_online_cp: False
+  online_cp_save_freq: 2
+  data_ratio: 0.7
+  recon: False
+  value_recon: False
+  online_iql_recon: False
+  iql_encoder_update_with: q
+  is_share_iql_encoder: True
+  idql_rollout: False
+  per_step_recon: True
+  force_stochastic_online: True
+
+online_v:
+  state_dim: null
+  v_hidden_width: 256
+  v_depth: 3
+  lr: 1.0e-4
+  device: ${training.device}

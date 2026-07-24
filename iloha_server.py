@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import argparse
 import asyncio
 import json
 import socket
@@ -23,6 +24,7 @@ from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraCon
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.video_utils import VideoEncodingManager
 from lerobot.robots.iloha import Iloha, IlohaConfig
+from lerobot.robots.iloha.iloha import MeasuredStateError
 from lerobot.utils.feature_utils import build_dataset_frame
 
 # TASK = "do something"
@@ -33,9 +35,9 @@ class RobotCommunicationNode:
     # データセット設定
     DATASET_ROOT = Path("datasets")
     DATASET_FPS = 30
-    EPISODE_MAX_TIME_S = 180
     CAMERA_MAX_FRAME_AGE_MS = 250
     ROBOT_STATE_MAX_AGE_MS = 250
+    ROBOT_STATE_FAILURE_ABORT_S = 2.0
     CAM_HIGH_CROP_SIZE = (480, 640)  # height, width
     RECORDING_STOP_TIMEOUT_S = 5.0
     # カメラ設定
@@ -63,8 +65,9 @@ class RobotCommunicationNode:
         },
     }
 
-    def __init__(self):
+    def __init__(self, *, disable_realsense_auto_exposure: bool = False):
         self.websocket_port = 8080
+        self.disable_realsense_auto_exposure = disable_realsense_auto_exposure
         self.unity_joint_port: Optional[int] = None
         self.is_connected = False
         self.is_receiving_joints = False
@@ -88,11 +91,32 @@ class RobotCommunicationNode:
         self.current_dataset: Optional[LeRobotDataset] = None
         self.recording_start_time: Optional[float] = None
         self.recording_task: Optional[asyncio.Task] = None
+        self.recording_error: Optional[str] = None
         self.cameras: dict = {}
         self.video_encoding_manager: Optional[VideoEncodingManager] = None
         self.dataset_lock = threading.RLock()
         self.saved_episode_count = 0
         self.shutdown_event = asyncio.Event()
+
+    @staticmethod
+    def _disable_camera_auto_exposure(camera) -> int:
+        """Disable auto exposure on every sensor that supports it."""
+        import pyrealsense2 as rs
+
+        if camera.rs_profile is None:
+            raise RuntimeError("RealSenseカメラが接続されていません")
+
+        auto_exposure_option = rs.option.enable_auto_exposure
+        configured_sensor_count = 0
+        for sensor in camera.rs_profile.get_device().query_sensors():
+            if not sensor.supports(auto_exposure_option):
+                continue
+            sensor.set_option(auto_exposure_option, 0.0)
+            configured_sensor_count += 1
+
+        if configured_sensor_count == 0:
+            raise RuntimeError("自動露光設定に対応するセンサーがありません")
+        return configured_sensor_count
 
     def _get_buffered_frame_count(self) -> int:
         """現在のエピソードバッファに積まれているフレーム数を返す"""
@@ -157,6 +181,9 @@ class RobotCommunicationNode:
             for name, camera in cameras.items():
                 print(f"{name} を接続中...")
                 camera.connect(warmup=True)
+                if self.disable_realsense_auto_exposure:
+                    sensor_count = self._disable_camera_auto_exposure(camera)
+                    print(f"  自動露光を無効化しました（{sensor_count}センサー）")
                 time.sleep(1.0)
             print(f"{len(cameras)}台のカメラを初期化しました")
             return cameras
@@ -220,6 +247,7 @@ class RobotCommunicationNode:
                 self.video_encoding_manager = VideoEncodingManager(self.current_dataset)
                 self.video_encoding_manager.__enter__()
             self.saved_episode_count = 0
+            self.recording_error = None
             print(f"データセット作成完了: {repo_id}")
             with self.action_lock:
                 self.recording_armed_action_sequence = self.action_sequence
@@ -288,6 +316,22 @@ class RobotCommunicationNode:
                 response = {"status": "save_error", "message": "データセットが存在しません"}
                 await websocket.send(json.dumps(response))
                 return
+            if self.recording_error is not None:
+                recording_error = self.recording_error
+                await asyncio.to_thread(self._clear_episode_buffer_sync)
+                self.recording_error = None
+                self.recording_start_time = None
+                self.recording_ready = True
+                await self._prepare_next_episode()
+                response = {
+                    "status": "save_error",
+                    "message": (
+                        "記録中にエラーが発生したため、不完全なエピソードを破棄しました: "
+                        f"{recording_error}"
+                    ),
+                }
+                await websocket.send(json.dumps(response))
+                return
             if self._get_buffered_frame_count() == 0:
                 await asyncio.to_thread(self._clear_episode_buffer_sync)
                 self.recording_start_time = None
@@ -341,6 +385,8 @@ class RobotCommunicationNode:
                 await websocket.send(json.dumps(response))
                 return
             await asyncio.to_thread(self._clear_episode_buffer_sync)
+            self.recording_error = None
+            self.recording_ready = True
             await self._prepare_next_episode()
             print("エピソード破棄完了")
             response = {"status": "discard_complete", "message": "エピソードを破棄しました。次のエピソードの準備ができています"}
@@ -361,6 +407,7 @@ class RobotCommunicationNode:
         ):
             self.is_recording = False
             self.recording_start_time = None
+            self.recording_error = None
             with self.action_lock:
                 self.recording_armed_action_sequence = self.action_sequence
             self.recording_task = asyncio.create_task(self.record_episode())
@@ -395,6 +442,7 @@ class RobotCommunicationNode:
             self.current_dataset = None
         self.recording_start_time = None
         self.recording_ready = False
+        self.recording_error = None
 
     def _capture_latest_observation(self) -> dict:
         """カメラの最新フレームを非同期制御を止めずに取得する"""
@@ -460,6 +508,8 @@ class RobotCommunicationNode:
         """30FPSで画像と関節角度を記録"""
         print("エピソード記録ループ準備完了。初回アクション受信待機中...")
         frame_count = 0
+        state_failure_started_at = None
+        skipped_state_frames = 0
         while not self.is_recording and self.recording_ready:
             await asyncio.sleep(0.01)
         if not self.is_recording:
@@ -469,7 +519,29 @@ class RobotCommunicationNode:
         try:
             while self.is_recording:
                 start_time = time.perf_counter()
-                recorded = await asyncio.to_thread(self._record_frame_sync)
+                try:
+                    recorded = await asyncio.to_thread(self._record_frame_sync)
+                except MeasuredStateError as exc:
+                    now = time.monotonic()
+                    if state_failure_started_at is None:
+                        state_failure_started_at = now
+                        print(f"関節実測値が一時的に利用できないためフレームをスキップします: {exc}")
+                    skipped_state_frames += 1
+                    failure_duration_s = now - state_failure_started_at
+                    if failure_duration_s >= self.ROBOT_STATE_FAILURE_ABORT_S:
+                        raise RuntimeError(
+                            "関節実測値が"
+                            f"{failure_duration_s:.1f}秒以上回復しないため記録を中止します"
+                        ) from exc
+                    await asyncio.sleep(1.0 / self.DATASET_FPS)
+                    continue
+                if state_failure_started_at is not None:
+                    print(
+                        "関節実測値が回復しました "
+                        f"(スキップ={skipped_state_frames}フレーム)"
+                    )
+                    state_failure_started_at = None
+                    skipped_state_frames = 0
                 if not recorded:
                     await asyncio.sleep(1.0 / self.DATASET_FPS)
                     continue
@@ -477,9 +549,6 @@ class RobotCommunicationNode:
                 if frame_count % 30 == 0:
                     elapsed_time = time.time() - self.recording_start_time
                     print(f"記録中... {frame_count}フレーム ({elapsed_time:.1f}秒)")
-                if time.time() - self.recording_start_time >= self.EPISODE_MAX_TIME_S:
-                    print(f"最大記録時間({self.EPISODE_MAX_TIME_S}秒)に達しました")
-                    break
                 elapsed = time.perf_counter() - start_time
                 if elapsed > (1.0 / self.control_frequency):
                     print(f"記録フレーム処理が重いです: {elapsed * 1000:.1f} ms")
@@ -489,6 +558,9 @@ class RobotCommunicationNode:
         except asyncio.CancelledError:
             print("記録ループがキャンセルされました")
         except Exception as e:
+            self.is_recording = False
+            self.recording_ready = False
+            self.recording_error = str(e)
             print(f"記録ループエラー: {e}")
             import traceback
             traceback.print_exc()
@@ -685,6 +757,10 @@ class RobotCommunicationNode:
                     await asyncio.sleep(sleep_duration)
         except asyncio.CancelledError:
             print("ロボット制御ワーカーがキャンセルされました")
+        except Exception as e:
+            print(f"ロボット制御ワーカーエラー: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             print("ロボット制御ワーカー終了")
 
@@ -808,9 +884,24 @@ class RobotCommunicationNode:
         finally:
             await self.cleanup()
 
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Unity-Iloha通信サーバー")
+    parser.add_argument(
+        "--disable-realsense-auto-exposure",
+        action="store_true",
+        help="RealSenseのウォームアップ後に、対応する全センサーの自動露光調整を無効化します",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    node = RobotCommunicationNode()
+    args = parse_args()
+    node = RobotCommunicationNode(
+        disable_realsense_auto_exposure=args.disable_realsense_auto_exposure,
+    )
     print("Unity-Iloha通信サーバーを起動します...")
     asyncio.run(node.start_server())
 
 # uv run iloha_server.py
+# uv run iloha_server.py --disable-realsense-auto-exposure

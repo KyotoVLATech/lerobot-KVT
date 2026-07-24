@@ -177,7 +177,6 @@ outputs/
 *.xml
 *.part
 
-datasets/
-datasets_4_20/
+datasets*
 .codex
 uv.lock

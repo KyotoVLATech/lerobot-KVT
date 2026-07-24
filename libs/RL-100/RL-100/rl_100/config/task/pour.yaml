@@ -1,0 +1,73 @@
+name: pour
+
+task_name: pour
+
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    image:
+      shape: [3, 84, 84]
+      type: rgb
+    point_cloud:
+      shape: [512, 3]
+      type: point_cloud
+    agent_pos:
+      shape: [23]
+      type: low_dim
+  action:
+    shape: [22]
+
+env_runner:
+  _target_: rl_100.env_runner.pour_runner.Pour
+  eval_episodes: 16
+  max_steps: 1000
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  fps: 10
+  task_name: rotate
+  render_size: 84
+  use_point_crop: ${policy.use_point_crop}
+  env_num: 8
+  fake_env: False
+  state_shape: 6
+norm_dataset:
+  _target_: rl_100.dataset.pour_dataset.PourDataset
+  zarr_path: data/data_pour_100_512.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: 9000000
+  pre_image_norm: False
+dataset:
+  _target_: rl_100.dataset.pour_dataset.PourDataset
+  zarr_path: data/data_pour_100_512.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: 9000000
+  pre_image_norm: False
+critic_dataset:
+  _target_: rl_100.dataset.pour_dataset.PourDataset
+  zarr_path: data/data_pour_100_512.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.00
+  max_train_episodes: 9000000
+  pre_image_norm: False
+scale_dataset:
+  _target_: rl_100.dataset.pour_dataset.PourDataset
+  zarr_path: data/data_pour_100_512.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.00
+  max_train_episodes: 9000000
+  scale_strategy: 'dynamic'
+  pre_image_norm: False

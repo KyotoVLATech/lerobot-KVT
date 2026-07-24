@@ -1,0 +1,66 @@
+name: reach-wall
+
+task_name: ${name}
+crop_shape: null
+  # - null
+  # - null
+
+shape_meta: &shape_meta
+  obs:
+    # Multi-view RGB observations
+    # image_gripperPOV:
+    #   shape: [3, 84, 84]
+    #   type: rgb
+    image_corner2:
+      shape: [3, 84, 84]
+      type: rgb
+    # image_topview:
+    #   shape: [3, 84, 84]
+    #   type: rgb
+    # Robot proprioception
+    agent_pos:
+      shape: [9]  # MetaWorld standard proprioception
+      type: low_dim
+  action:
+    shape: [4]  # 3D position + gripper
+
+dataset:
+  _target_: rl_100.dataset.metaworld_multiview_dataset.MetaworldMultiViewDataset
+  zarr_path: data/mv_metaworld_reach-wall_expert.zarr
+  horizon: ${horizon}
+  pad_before: 1
+  pad_after: 3
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: 90
+  pre_image_norm: False
+  img_shape_meta: ${shape_meta.obs}
+
+critic_dataset:
+  _target_: rl_100.dataset.metaworld_multiview_dataset.MetaworldMultiViewDataset
+  zarr_path: data/mv_metaworld_reach-wall_expert.zarr
+  horizon: ${horizon}
+  pad_before: 1
+  pad_after: 3
+  seed: 42
+  val_ratio: 0.0
+  max_train_episodes: 90
+  pre_image_norm: False
+  img_shape_meta: ${shape_meta.obs}
+
+env_runner:
+  _target_: rl_100.env_runner.metaworld_multiview_runner.MetaworldRunner
+  eval_episodes: 20
+  max_steps: 200
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  fps: 10
+  n_envs: null
+  n_train: null
+  n_test: null
+  task_name: ${task_name}
+  device: ${training.device}
+  use_point_crop: False
+  with_pointcloud: False
+  env_num: 8
+  img_shape_meta: ${shape_meta.obs}
