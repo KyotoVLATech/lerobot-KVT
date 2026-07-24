@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, List, Optional, Union
+from typing import Any
 
 from .aloha_arm_controller import AlohaArm, AlohaArmController
 
@@ -16,11 +16,13 @@ class AlohaController:
         left_robstride_port: str,
         right_dynamixel_port: str,
         left_dynamixel_port: str,
-        robstride_current_limit: Union[float, dict[int, float]] = 2.0,
-        right_robstride_constants: Optional[List[Any]] = None,
-        right_dynamixel_constants: Optional[List[Any]] = None,
-        left_robstride_constants: Optional[List[Any]] = None,
-        left_dynamixel_constants: Optional[List[Any]] = None,
+        robstride_current_limit: float | dict[int, float] = 2.0,
+        right_gripper_current_ma: float = 300.0,
+        left_gripper_current_ma: float = 300.0,
+        right_robstride_constants: list[Any] | None = None,
+        right_dynamixel_constants: list[Any] | None = None,
+        left_robstride_constants: list[Any] | None = None,
+        left_dynamixel_constants: list[Any] | None = None,
     ):
         """
         ALOHAコントローラーを初期化
@@ -83,8 +85,8 @@ class AlohaController:
             ]
 
         # アームコントローラーのインスタンス
-        self.right_arm_controller: Optional[AlohaArmController] = None
-        self.left_arm_controller: Optional[AlohaArmController] = None
+        self.right_arm_controller: AlohaArmController | None = None
+        self.left_arm_controller: AlohaArmController | None = None
 
         # 初期化パラメータを保存
         self.right_params = {
@@ -93,6 +95,7 @@ class AlohaController:
             "robstride_constants": right_robstride_constants,
             "dynamixel_constants": right_dynamixel_constants,
             "robstride_current_limit": robstride_current_limit,
+            "gripper_current_ma": right_gripper_current_ma,
         }
         self.left_params = {
             "robstride_port": left_robstride_port,
@@ -100,6 +103,7 @@ class AlohaController:
             "robstride_constants": left_robstride_constants,
             "dynamixel_constants": left_dynamixel_constants,
             "robstride_current_limit": robstride_current_limit,
+            "gripper_current_ma": left_gripper_current_ma,
         }
 
     async def _initialize_controllers(self) -> None:
@@ -111,18 +115,25 @@ class AlohaController:
             self.right_arm_controller = AlohaArmController(**self.right_params)
             self.left_arm_controller = AlohaArmController(**self.left_params)
 
-            # 両アームを並列に初期化
-            print("  両アーム並列初期化中...")
-            await asyncio.gather(
-                self.right_arm_controller.__aenter__(),
-                self.left_arm_controller.__aenter__(),
+            # 片腕の設定失敗中にもう片腕だけが動き始めないよう、
+            # 接続・設定と原点移動を明確に分ける。
+            print("  両アーム接続・設定中（この段階では移動しません）...")
+            await self.right_arm_controller._initialize_controllers(
+                move_to_initial=False
             )
+            await self.left_arm_controller._initialize_controllers(
+                move_to_initial=False
+            )
+
+            print("  両アーム設定完了。原点移動を開始します...")
+            await self.right_arm_controller._move_to_initial_position()
+            await self.left_arm_controller._move_to_initial_position()
 
             print("✅ ALOHA双腕コントローラー初期化完了!")
 
         except Exception as e:
             print(f"❌ 初期化エラー: {e}")
-            await self.disable()
+            await self.disable(return_to_initial=False)
             raise
 
     async def update_pos(self, right_arm: AlohaArm, left_arm: AlohaArm) -> None:
@@ -141,6 +152,17 @@ class AlohaController:
             self.right_arm_controller.update_pos(right_arm),
             self.left_arm_controller.update_pos(left_arm),
         )
+
+    async def get_pos(self) -> tuple[AlohaArm, AlohaArm]:
+        """左右両腕の実測関節角度を並列取得する。"""
+        if self.right_arm_controller is None or self.left_arm_controller is None:
+            raise RuntimeError("コントローラーが初期化されていません")
+
+        right_arm, left_arm = await asyncio.gather(
+            self.right_arm_controller.get_pos(),
+            self.left_arm_controller.get_pos(),
+        )
+        return right_arm, left_arm
 
     async def update_motor_pos(
         self, arm: str, motor_num: int, target_pos: float
@@ -163,25 +185,25 @@ class AlohaController:
         else:
             raise ValueError("armは'right'または'left'を指定してください")
 
-    async def set_gripper_current(self, arm: str, current_mA: float) -> None:
+    async def set_gripper_current(self, arm: str, current_ma: float) -> None:
         """
         指定したアームのグリッパーの電流を設定
 
         Args:
             arm: アーム指定 ("right" または "left")
-            current_mA: 目標電流 (mA)
+            current_ma: 目標電流 (mA)
         """
         if self.right_arm_controller is None or self.left_arm_controller is None:
             raise RuntimeError("コントローラーが初期化されていません")
 
         if arm == "right":
-            await self.right_arm_controller.set_gripper_current(current_mA)
+            await self.right_arm_controller.set_gripper_current(current_ma)
         elif arm == "left":
-            await self.left_arm_controller.set_gripper_current(current_mA)
+            await self.left_arm_controller.set_gripper_current(current_ma)
         else:
             raise ValueError("armは'right'または'left'を指定してください")
 
-    async def disable(self) -> None:
+    async def disable(self, *, return_to_initial: bool = True) -> None:
         """全モーターを初期位置に戻し、接続を切断（並列実行）"""
         print("🔄 ALOHA双腕コントローラー終了処理中...")
 
@@ -193,7 +215,9 @@ class AlohaController:
             async def disable_right() -> None:
                 try:
                     print("  右アーム終了処理中...")
-                    await self.right_arm_controller.disable()
+                    await self.right_arm_controller.disable(
+                        return_to_initial=return_to_initial
+                    )
                 except Exception as e:
                     print(f"⚠️ 右アーム終了処理エラー: {e}")
                 finally:
@@ -206,7 +230,9 @@ class AlohaController:
             async def disable_left() -> None:
                 try:
                     print("  左アーム終了処理中...")
-                    await self.left_arm_controller.disable()
+                    await self.left_arm_controller.disable(
+                        return_to_initial=return_to_initial
+                    )
                 except Exception as e:
                     print(f"⚠️ 左アーム終了処理エラー: {e}")
                 finally:

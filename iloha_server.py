@@ -35,6 +35,7 @@ class RobotCommunicationNode:
     DATASET_FPS = 30
     EPISODE_MAX_TIME_S = 180
     CAMERA_MAX_FRAME_AGE_MS = 250
+    ROBOT_STATE_MAX_AGE_MS = 250
     CAM_HIGH_CROP_SIZE = (480, 640)  # height, width
     RECORDING_STOP_TIMEOUT_S = 5.0
     # カメラ設定
@@ -122,8 +123,8 @@ class RobotCommunicationNode:
         try:
             config = IlohaConfig(
                 left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
-                left_robstride_port="/dev/ttyUSB3",
-                right_robstride_port="/dev/ttyUSB2",
+                left_robstride_port="auto",
+                right_robstride_port="auto",
                 right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
                 max_relative_target_1=0.03, # yaw
                 max_relative_target_2=0.01, # pitch
@@ -143,6 +144,8 @@ class RobotCommunicationNode:
         except Exception as e:
             print(f"ロボット初期化エラー: {e}")
             self.robot_connected = False
+            self.robot = None
+            raise
 
     def _initialize_cameras(self) -> dict:
         """カメラを初期化して辞書で返す"""
@@ -399,7 +402,10 @@ class RobotCommunicationNode:
             raise RuntimeError("ロボットが初期化されていません")
 
         obs = capture_camera_observation(self.cameras, self.CAMERA_MAX_FRAME_AGE_MS)
-        joint_state = iloha_to_aloha(self.robot.old_action)
+        measured_state = self.robot.get_measured_state(
+            max_age_s=self.ROBOT_STATE_MAX_AGE_MS / 1000
+        )
+        joint_state = iloha_to_aloha(measured_state)
         for i, joint_name in enumerate(JOINT_NAMES):
             obs[joint_name] = joint_state[i]
         return obs

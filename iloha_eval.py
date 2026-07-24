@@ -235,7 +235,7 @@ def crop_cam_high_for_dataset(image: np.ndarray) -> np.ndarray:
 
 
 def capture_observation(robot: Iloha, state_names: tuple[str, ...]) -> dict:
-    """iloha_server.pyと同じく、RGB・深度画像とold_action由来のALOHA状態を観測にする"""
+    """RGB・深度画像とモータ実測値由来のALOHA状態を観測にする。"""
     obs = capture_camera_observation(robot.cameras, CAMERA_MAX_FRAME_AGE_MS)
     if "cam_high" in obs:
         obs["cam_high"] = crop_cam_high_for_dataset(obs["cam_high"])
@@ -243,7 +243,9 @@ def capture_observation(robot: Iloha, state_names: tuple[str, ...]) -> dict:
     if cam_high_depth_key in obs:
         obs[cam_high_depth_key] = crop_cam_high_for_dataset(obs[cam_high_depth_key])
 
-    aloha_state = iloha_to_aloha(robot.old_action)
+    aloha_state = iloha_to_aloha(
+        robot.get_measured_state(max_age_s=CAMERA_MAX_FRAME_AGE_MS / 1000)
+    )
     for i, joint_name in enumerate(state_names):
         obs[joint_name] = float(aloha_state[i])
     return obs
@@ -352,7 +354,7 @@ async def evaluation_loop(
             print(f"エピソード時間（{episode_time_s}秒）に達しました")
             return frame_count
         
-        # 1. サーバ実装に合わせて、最新画像とold_action由来のALOHA状態を取得
+        # 1. サーバ実装に合わせて、最新画像とモータ実測値由来のALOHA状態を取得
         obs_for_policy = capture_observation(robot, state_names)
         
         if frame_count == 0:
@@ -511,9 +513,9 @@ async def main(args):
     print("=" * 60)
     print("ロボットを初期化中...")
     config = IlohaConfig(
-        left_robstride_port="/dev/ttyUSB3",
+        left_robstride_port="auto",
         left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
-        right_robstride_port="/dev/ttyUSB2",
+        right_robstride_port="auto",
         right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
         max_relative_target_1=0.03,
         max_relative_target_2=0.01,

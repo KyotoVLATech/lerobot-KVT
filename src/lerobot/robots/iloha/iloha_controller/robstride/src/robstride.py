@@ -8,6 +8,7 @@ from asyncio import Lock
 from dataclasses import dataclass
 from logging import Formatter, StreamHandler, getLogger
 from typing import Any, List, Optional, Union
+
 import serial_asyncio
 
 from .constants import CommandType, FaultCode, MotorStatus, ParameterIndex, RunMode
@@ -75,11 +76,15 @@ class RobStrideController:
         motors: list[RobStride],
         baudrate: int = 921600,
         host_id: int = 253,
+        log_timeout_errors: bool = True,
+        log_latency_stats: bool = True,
     ):
         self.port = port
         self.baudrate = baudrate
         self.motors = {motor.id: motor for motor in motors}
         self.host_id = host_id
+        self.log_timeout_errors = log_timeout_errors
+        self.log_latency_stats = log_latency_stats
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
         self.lock = Lock()
@@ -136,14 +141,16 @@ class RobStrideController:
                 self.writer.write(frame)
                 await self.writer.drain()
 
-                # 3. Read response with short timeout (15ms)
+                # 3. 残留CRLF等を読み飛ばしてATヘッダーへ同期し、
+                #    そこからバイナリ17バイト固定長で読む。
                 response = await asyncio.wait_for(
-                    self.reader.readuntil(b'\x0d\x0a'), timeout=0.015
+                    self._read_response_frame(), timeout=0.015
                 )
 
             except asyncio.TimeoutError:
                 # Just log and return None without disabling the motor
-                logger.error(f"[Motor {motor_id}] No response received from motor within 15ms")
+                if self.log_timeout_errors:
+                    logger.error(f"[Motor {motor_id}] No response received from motor within 15ms")
                 return None
             except Exception as e:
                 logger.error(f"[Motor {motor_id}] Error during serial I/O: {e}")
@@ -156,7 +163,7 @@ class RobStrideController:
                 self._latencies[motor_id].append(latency_ms)
 
                 # 5秒おきに統計を表示
-                if end_time - self._last_print_time > 5.0:
+                if self.log_latency_stats and end_time - self._last_print_time > 5.0:
                     self._print_latency_stats()
                     self._last_print_time = end_time
 
@@ -173,6 +180,18 @@ class RobStrideController:
                     f"Invalid response format received: {response.hex(' ') if response else 'None'}"
                 )
             return None
+
+    async def _read_response_frame(self) -> bytes:
+        assert self.reader is not None
+
+        while True:
+            if await self.reader.readexactly(1) != b"A":
+                continue
+            if await self.reader.readexactly(1) != b"T":
+                continue
+            response = b"AT" + await self.reader.readexactly(15)
+            if response.endswith(b"\r\n"):
+                return response
 
     def _print_latency_stats(self):
         """直近の通信遅延統計をターミナルに表示"""
@@ -474,18 +493,22 @@ class RobStrideController:
             )
             return False
 
-    async def disable(self, motor_id: int) -> None:
+    async def disable(self, motor_id: int) -> bool:
         """指定されたモーターを無効化（運転停止）します。"""
         if motor_id not in self.motors:
             logger.error(f"Motor ID {motor_id} not found in motor list")
-            return
+            return False
 
         logger.info(f"Disabling motor {motor_id}")
         frame = self._create_frame(CommandType.DISABLE, motor_id)
-        await self._send_and_receive(frame)
+        response = await self._send_and_receive(frame)
+        if response is None:
+            logger.error(f"Failed to disable motor {motor_id}")
+            return False
         self.motors[motor_id]._set_enabled(False)
         self.motors[motor_id]._set_mode(None)
         logger.info(f"Disable command sent successfully to motor {motor_id}")
+        return True
 
     async def save_parameters(self, motor_id: int) -> bool:
         """
@@ -523,9 +546,19 @@ class RobStrideController:
 
         return True
 
-    def _check_motor_mode(self, motor_id: int, required_mode: RunMode) -> bool:
+    def _check_motor_mode(
+        self,
+        motor_id: int,
+        required_mode: RunMode,
+        *,
+        allow_disabled: bool = False,
+    ) -> bool:
         """モーターが指定されたモードかどうかをチェック"""
-        if not self._check_motor_enabled(motor_id):
+        if motor_id not in self.motors:
+            logger.error(f"Motor ID {motor_id} not found in motor list")
+            return False
+
+        if not allow_disabled and not self._check_motor_enabled(motor_id):
             return False
 
         current_mode = self.motors[motor_id].get_current_mode()
@@ -593,9 +626,18 @@ class RobStrideController:
     async def set_mode_pp(self, motor_id: int) -> bool:
         return await self._set_run_mode(motor_id, RunMode.POSITION_PP)
 
-    async def apply_pp_limits(self, motor_id: int) -> bool:
+    async def apply_pp_limits(
+        self,
+        motor_id: int,
+        *,
+        allow_disabled: bool = False,
+    ) -> bool:
         """PP モードのリミッターを適用"""
-        if not self._check_motor_mode(motor_id, RunMode.POSITION_PP):
+        if not self._check_motor_mode(
+            motor_id,
+            RunMode.POSITION_PP,
+            allow_disabled=allow_disabled,
+        ):
             return False
 
         motor = self.motors[motor_id]
@@ -635,7 +677,9 @@ class RobStrideController:
 
         return success
 
-    async def set_target_position(self, motor_id: int, position_rad: float) -> None:
+    async def set_target_position(
+        self, motor_id: int, position_rad: float
+    ) -> Optional[bytes]:
         if motor_id not in self.motors:
             logger.error(f"Motor ID {motor_id} not found in motor list")
             return
@@ -726,9 +770,18 @@ class RobStrideController:
     async def set_mode_csp(self, motor_id: int) -> bool:
         return await self._set_run_mode(motor_id, RunMode.POSITION_CSP)
 
-    async def apply_csp_limits(self, motor_id: int) -> bool:
+    async def apply_csp_limits(
+        self,
+        motor_id: int,
+        *,
+        allow_disabled: bool = False,
+    ) -> bool:
         """CSP モードのリミッターを適用"""
-        if not self._check_motor_mode(motor_id, RunMode.POSITION_CSP):
+        if not self._check_motor_mode(
+            motor_id,
+            RunMode.POSITION_CSP,
+            allow_disabled=allow_disabled,
+        ):
             return False
 
         motor = self.motors[motor_id]

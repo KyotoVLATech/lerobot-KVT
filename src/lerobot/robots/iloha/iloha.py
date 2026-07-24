@@ -1,4 +1,8 @@
 import asyncio
+import contextlib
+import logging
+import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -6,10 +10,14 @@ import numpy as np
 from lerobot.robots.iloha.config_iloha import IlohaConfig
 
 from .iloha_controller.aloha_controller import AlohaArm, AlohaController
+from .iloha_controller.robstride_port_detection import resolve_robstride_ports
 
 JOINT_NAMES = [f"joint_{i}" for i in range(14)]
+STATE_POLL_FREQUENCY_HZ = 10.0
 
-class Iloha():
+logger = logging.getLogger(__name__)
+
+class Iloha:
     config_class = IlohaConfig
     name = "iloha"
 
@@ -29,6 +37,12 @@ class Iloha():
         # 指数平滑化フィルタの設定
         self.filter_alpha = 0.5
         self.filtered_joint_angles = None
+        self._measured_state: np.ndarray | None = (
+            np.zeros(14, dtype=np.float32) if self.debug else None
+        )
+        self._measured_state_timestamp: float | None = time.monotonic() if self.debug else None
+        self._measured_state_lock = threading.Lock()
+        self._state_polling_task: asyncio.Task | None = None
 
     @property
     def observation_features(self) -> dict:
@@ -72,24 +86,90 @@ class Iloha():
                 obs[name] = camera.read_latest()
             if getattr(camera, "use_depth", False):
                 obs[f"{name}_depth"] = camera.read_latest_depth()
+        measured_state = self.get_measured_state()
         for i, joint_name in enumerate(JOINT_NAMES):
-            obs[joint_name] = self.old_action[i]
+            obs[joint_name] = measured_state[i]
         return obs
 
     async def connect(self) -> None:
         if not self.debug:
+            robstride_ports = await resolve_robstride_ports(
+                left=self.config.left_robstride_port,
+                right=self.config.right_robstride_port,
+            )
+            print(
+                "RobStrideポート: "
+                f"left={robstride_ports.left}, right={robstride_ports.right}"
+            )
             self.aloha = AlohaController(
-                self.config.right_robstride_port,
-                self.config.left_robstride_port,
+                robstride_ports.right,
+                robstride_ports.left,
                 self.config.right_dynamixel_port,
                 self.config.left_dynamixel_port,
                 robstride_current_limit=self.config.current_limit_robstride,
+                right_gripper_current_ma=self.config.current_limit_gripper_R * 1000,
+                left_gripper_current_ma=self.config.current_limit_gripper_L * 1000,
             )
-            # AlohaControllerを非同期で初期化
-            await self.aloha.__aenter__()
-            # グリッパー電流を設定
-            await self.aloha.set_gripper_current("left", self.config.current_limit_gripper_L*1000)
-            await self.aloha.set_gripper_current("right", self.config.current_limit_gripper_R*1000)
+            try:
+                # AlohaControllerを非同期で初期化
+                await self.aloha.__aenter__()
+                measured_state = await self.refresh_measured_state()
+                self.old_action = measured_state.copy()
+                self.filtered_joint_angles = measured_state.copy()
+                self._state_polling_task = asyncio.create_task(self._state_polling_loop())
+            except Exception:
+                await self.aloha.disable(return_to_initial=False)
+                self.aloha = None
+                raise
+
+    async def refresh_measured_state(self) -> np.ndarray:
+        """全モータから実角度を取得し、iLoHA論理関節座標でキャッシュする。"""
+        if self.debug:
+            measured_state = self.old_action.copy()
+        else:
+            if self.aloha is None:
+                raise RuntimeError("Iloha is not connected")
+            right_arm, left_arm = await self.aloha.get_pos()
+            measured_state = np.asarray(
+                [*left_arm.get_positions(), *right_arm.get_positions()],
+                dtype=np.float32,
+            )
+            # send_actionで論理グリッパー値をモータ角へ変換しているため、その逆変換を行う。
+            measured_state[6] = -measured_state[6] * 3 / np.pi
+            measured_state[13] = -measured_state[13] * 3 / np.pi
+
+        with self._measured_state_lock:
+            self._measured_state = measured_state.copy()
+            self._measured_state_timestamp = time.monotonic()
+        return measured_state
+
+    def get_measured_state(self, max_age_s: float | None = None) -> np.ndarray:
+        """最新の実測関節角度を取得し、必要なら鮮度も検証する。"""
+        with self._measured_state_lock:
+            measured_state = None if self._measured_state is None else self._measured_state.copy()
+            timestamp = self._measured_state_timestamp
+
+        if measured_state is None or timestamp is None:
+            raise RuntimeError("Measured motor state is not available yet")
+        age_s = time.monotonic() - timestamp
+        if max_age_s is not None and age_s > max_age_s:
+            raise RuntimeError(f"Measured motor state is stale: age={age_s * 1000:.1f} ms")
+        return measured_state
+
+    async def _state_polling_loop(self) -> None:
+        period_s = 1.0 / STATE_POLL_FREQUENCY_HZ
+        while True:
+            started_at = time.monotonic()
+            try:
+                await self.refresh_measured_state()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Failed to refresh measured iLoHA state: %s", exc)
+
+            sleep_s = period_s - (time.monotonic() - started_at)
+            if sleep_s > 0:
+                await asyncio.sleep(sleep_s)
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         action_L = AlohaArm(
@@ -225,6 +305,11 @@ class Iloha():
 
 
     async def disconnect(self):
+        if self._state_polling_task is not None:
+            self._state_polling_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._state_polling_task
+            self._state_polling_task = None
         if self.aloha is not None:
             await self.aloha.disable()
             self.aloha = None
