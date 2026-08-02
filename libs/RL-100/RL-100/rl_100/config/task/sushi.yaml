@@ -1,0 +1,99 @@
+name: sushi
+
+task_name: sushi
+crop_shape: null
+
+# iloha-dataset-sushi: bimanual ALOHA互換, 14次元 state / 14次元 action, 3台RGBカメラ(深度なし)
+# 画像は iloha_to_rl100_zarr.py で 240x320(HWC uint8, RGB) に変換済み。
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    rgb_head:
+      shape: [3, 240, 320]     # cam_high
+      type: rgb
+    rgb_left_hand:
+      shape: [3, 240, 320]     # cam_left_wrist
+      type: rgb
+    rgb_right_hand:
+      shape: [3, 240, 320]     # cam_right_wrist
+      type: rgb
+    agent_pos:
+      shape: [14]              # ALOHA joint 状態(14) をそのまま使用
+      type: low_dim
+  action:
+    shape: [14]                # ALOHA joint 目標(14)
+
+# 実機/シムのオンライン評価はオフライン学習では行わない。fake_env=True でダミー指標を返す。
+# 実評価は iloha_eval.py / iloha_online_rl.py で別途行う。
+env_runner:
+  # 実機/シムを持たない軽量ダミー runner。オフライン学習中のオンライン評価は行わない
+  # （実評価・オンラインRLは iloha_online_rl.py で別途）。
+  _target_: rl_100.env_runner.fake_runner.FakeRunner
+  eval_episodes: 1
+  max_steps: 300
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  fps: 30
+  env_num: 1
+
+dataset:
+  _target_: rl_100.dataset.iloha.Iloha
+  zarr_path: data/iloha_sushi_240_320.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: 900000000
+  pre_image_norm: False
+  rgb_head_shape: ${shape_meta.obs.rgb_head.shape}
+  rgb_right_hand_shape: ${shape_meta.obs.rgb_right_hand.shape}
+  rgb_left_hand_shape: ${shape_meta.obs.rgb_left_hand.shape}
+
+# chunk-action オフラインRL の critic 用データセット(ストライド指定可)
+critic_dataset:
+  _target_: rl_100.dataset.iloha.Iloha
+  zarr_path: data/iloha_sushi_240_320.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.00
+  max_train_episodes: 900000000
+  pre_image_norm: False
+  sequence_stride: 1
+  rgb_head_shape: ${shape_meta.obs.rgb_head.shape}
+  rgb_right_hand_shape: ${shape_meta.obs.rgb_right_hand.shape}
+  rgb_left_hand_shape: ${shape_meta.obs.rgb_left_hand.shape}
+
+# chunk-action オフラインRL の finetune 用データセット(ストライド指定可)
+finetune_dataset:
+  _target_: rl_100.dataset.iloha.Iloha
+  zarr_path: data/iloha_sushi_240_320.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.00
+  max_train_episodes: 900000000
+  pre_image_norm: False
+  sequence_stride: 1
+  rgb_head_shape: ${shape_meta.obs.rgb_head.shape}
+  rgb_right_hand_shape: ${shape_meta.obs.rgb_right_hand.shape}
+  rgb_left_hand_shape: ${shape_meta.obs.rgb_left_hand.shape}
+
+# 報酬スケーリング(dynamic)用データセット
+scale_dataset:
+  _target_: rl_100.dataset.iloha.Iloha
+  zarr_path: data/iloha_sushi_240_320.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.00
+  max_train_episodes: 900000000
+  scale_strategy: 'dynamic'
+  pre_image_norm: False
+  rgb_head_shape: ${shape_meta.obs.rgb_head.shape}
+  rgb_right_hand_shape: ${shape_meta.obs.rgb_right_hand.shape}
+  rgb_left_hand_shape: ${shape_meta.obs.rgb_left_hand.shape}

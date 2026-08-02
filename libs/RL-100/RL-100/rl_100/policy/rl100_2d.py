@@ -10,7 +10,10 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from termcolor import cprint
 import copy
 import time
-import pytorch3d.ops as torch3d_ops
+try:
+    import pytorch3d.ops as torch3d_ops  # 3D点群FPS用。2D経路では未使用のため任意依存にする
+except Exception:
+    torch3d_ops = None
 from copy import deepcopy
 from rl_100.unidpg.critic import IQL_Q_V_no
 from rl_100.model.common.normalizer import LinearNormalizer
