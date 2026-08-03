@@ -6,7 +6,7 @@ import serial_asyncio
 # ご自身の環境に合わせて変更してください
 SERIAL_PORT = "/dev/ttyUSB2"  # COMポート名（linuxなら/dev/ttyUSB0など）
 BAUDRATE = 921600  # ボーレート
-MOTOR_CAN_ID = 3  # 確認したいモーターのCAN ID（初期値は127）
+MOTOR_CAN_ID = 6  # 確認したいモーターのCAN ID（初期値は127）
 HOST_CAN_ID = 253  # ホスト側(PC)のID (任意だが0以外)
 # -----------------
 

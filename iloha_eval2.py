@@ -493,7 +493,7 @@ async def main(args):
     print("=" * 60)
     print("ロボットを初期化中...")
     config = IlohaConfig(
-        left_robstride_port="/dev/ttyUSB3",
+        left_robstride_port="/dev/ttyUSB0",
         left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
         right_robstride_port="/dev/ttyUSB2",
         right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
@@ -763,3 +763,20 @@ if __name__ == "__main__":
     
     # 非同期でメイン関数を実行
     asyncio.run(main(args))
+
+"""
+uv run --extra xvla iloha_eval2.py \
+    --policy_path outputs/train/xvla_iloha-dataset-all/checkpoints/060000/pretrained_model \
+    --dataset_path datasets/iloha-dataset-all \
+    --episode_time_s 20 \
+    --num_episodes 1 \
+    --task "Grab the edge of the towel and fold it twice. Quality: High"
+
+# 1/3程度の確率で成功
+uv run --extra xvla iloha_eval2.py \
+    --policy_path outputs/train/xvla_iloha-dataset-sushi/checkpoints/060000/pretrained_model \
+    --dataset_path datasets/iloha-dataset-sushi \
+    --episode_time_s 20 \
+    --num_episodes 1 \
+    --task "Grab the edge of the towel and fold it twice. Quality: High"
+"""

@@ -72,7 +72,7 @@ uv run iloha_eval.py \
 ```
 X-VLA
 ```bash
-uv run --extra xvla iloha_eval.py \
+uv run --extra xvla iloha_eval2.py \
     --policy_path outputs/train/xvla_iloha-dataset-all/checkpoints/100000/pretrained_model \
     --dataset_path datasets/iloha-dataset-all \
     --episode_time_s 20 \
