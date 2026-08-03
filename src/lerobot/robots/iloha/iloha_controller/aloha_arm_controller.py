@@ -17,6 +17,7 @@ from .robstride.src.robstride import (
     RobStrideController,
     RobStrideLimits,
 )
+from .robstride.src.constants import ParameterIndex
 
 
 @dataclass
@@ -91,6 +92,8 @@ class AlohaArmController:
         # コントローラーのインスタンス
         self.robstride_controller: Optional[RobStrideController] = None
         self.dynamixel_controller: Optional[DynamixelController] = None
+        # RobStrideは2πを跨いだ位置を保持できるため、直前の回転枝を記録する。
+        self._robstride_target_references: dict[int, float] = {}
 
         # モーター設定
         self.robstride_current_limit = robstride_current_limit
@@ -213,30 +216,54 @@ class AlohaArmController:
         if failed_motors:
             raise RuntimeError(f"接続失敗したRobStrideモーターがあります: {failed_motors}")
 
-        # 2. 全て疎通していれば設定を続行
+        # 保存済みの古いLOC_REFのままenableしないよう、最初に全軸を無効化する。
+        for robstride_motor in self.robstride_motors:
+            if not await self.robstride_controller.disable(robstride_motor.id):
+                raise RuntimeError(
+                    f"RobStride Motor{robstride_motor.id} 無効化失敗"
+                )
+
+        # トルクOFFのままモードと制限値を設定する。
         for robstride_motor in self.robstride_motors:
             motor_id = robstride_motor.id
             if mode == "CSP":
                 if not await self.robstride_controller.set_mode_csp(motor_id):
                     raise RuntimeError(f"RobStride Motor{motor_id} CSPモード設定失敗")
-                if not await self.robstride_controller.enable(motor_id):
-                    raise RuntimeError(f"RobStride Motor{motor_id} 有効化失敗")
-                # リミット適用
-                if not await self.robstride_controller.apply_csp_limits(motor_id):
+                if not await self.robstride_controller.apply_csp_limits(
+                    motor_id, allow_disabled=True
+                ):
                     raise RuntimeError(f"RobStride Motor{motor_id} リミット設定失敗")
             elif mode == "PP":
                 if not await self.robstride_controller.set_mode_pp(motor_id):
                     raise RuntimeError(f"RobStride Motor{motor_id} PPモード設定失敗")
-                if not await self.robstride_controller.enable(motor_id):
-                    raise RuntimeError(f"RobStride Motor{motor_id} 有効化失敗")
-                # リミット適用
-                if not await self.robstride_controller.apply_pp_limits(motor_id):
+                if not await self.robstride_controller.apply_pp_limits(
+                    motor_id, allow_disabled=True
+                ):
                     raise RuntimeError(f"RobStride Motor{motor_id} リミット設定失敗")
             else:
                 raise ValueError("mode must be either 'CSP' or 'PP'")
 
             # 設定したリミットを不揮発メモリに保存（瞬断・再起動時に16Aに戻るのを防ぐ）
             await self.robstride_controller.save_parameters(motor_id)
+
+        # トルクON前に各軸の目標を実測現在位置へ同期する。
+        for motor in self.robstride_motors:
+            raw_position = await self.robstride_controller.get_parameter(
+                motor.id, ParameterIndex.MECH_POS
+            )
+            if raw_position is None:
+                raise RuntimeError(f"RobStride Motor{motor.id} 現在位置取得失敗")
+            logical_position = float(raw_position) - motor.offset
+            result = await self.robstride_controller.set_target_position(
+                motor.id, logical_position
+            )
+            if result is None:
+                raise RuntimeError(
+                    f"RobStride Motor{motor.id} 現在位置への目標同期失敗"
+                )
+            self._robstride_target_references[motor.id] = logical_position
+            if not await self.robstride_controller.enable(motor.id):
+                raise RuntimeError(f"RobStride Motor{motor.id} 有効化失敗")
 
     async def _move_to_initial_position(self) -> None:
         """全モーターを初期位置(0.0 rad)に移動"""
@@ -271,14 +298,37 @@ class AlohaArmController:
 
         # RobStrideとDynamixelの位置設定を並列実行
         await asyncio.gather(
-            # RobStrideは個別に送信（既存のAPIに合わせる）
-            *[
-                self.robstride_controller.set_target_position(motor_id, pos)
-                for motor_id, pos in robstride_positions.items()
-            ],
+            self._set_robstride_positions(robstride_positions),
             # Dynamixelは一括送信
             self._set_dynamixel_positions_rad(dynamixel_positions_rad),
         )
+
+    async def _set_robstride_positions(
+        self, logical_positions: dict[int, float]
+    ) -> None:
+        """現在の回転枝に最も近い2π等価角をRobStrideへ送る。"""
+        assert self.robstride_controller is not None
+
+        for motor_id, logical_position in logical_positions.items():
+            reference = self._robstride_target_references.get(
+                motor_id, logical_position
+            )
+            wire_position = self._nearest_equivalent_angle(
+                logical_position, reference
+            )
+            result = await self.robstride_controller.set_target_position(
+                motor_id, wire_position
+            )
+            if result is None:
+                raise ConnectionError(
+                    f"RobStride Motor{motor_id} 位置指令送信失敗"
+                )
+            self._robstride_target_references[motor_id] = wire_position
+
+    @staticmethod
+    def _nearest_equivalent_angle(angle: float, reference: float) -> float:
+        """referenceに最も近い、angleと2π等価な角度を返す。"""
+        return angle + math.tau * round((reference - angle) / math.tau)
 
     async def _set_dynamixel_positions_rad(
         self, positions_rad: dict[int, float]
@@ -320,7 +370,7 @@ class AlohaArmController:
         # RobStrideモーター (1-3番)
         if 1 <= motor_num <= 3:
             motor_id = self.robstride_motors[motor_num - 1].id
-            await self.robstride_controller.set_target_position(motor_id, target_pos)
+            await self._set_robstride_positions({motor_id: target_pos})
         # Dynamixelモーター (4-7番)
         elif 4 <= motor_num <= 7:
             motor_id = self.dynamixel_motors[motor_num - 4].id

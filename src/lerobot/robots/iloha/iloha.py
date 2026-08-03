@@ -3,6 +3,7 @@ import numpy as np
 from typing import Any
 import asyncio
 from .iloha_controller.aloha_controller import AlohaController, AlohaArm
+from .iloha_controller.robstride_port_detection import resolve_robstride_ports
 
 JOINT_NAMES = [f"joint_{i}" for i in range(14)]
 
@@ -69,9 +70,17 @@ class Iloha():
 
     async def connect(self) -> None:
         if not self.debug:
+            robstride_ports = await resolve_robstride_ports(
+                left=self.config.left_robstride_port,
+                right=self.config.right_robstride_port,
+            )
+            print(
+                "RobStrideポート: "
+                f"left={robstride_ports.left}, right={robstride_ports.right}"
+            )
             self.aloha = AlohaController(
-                self.config.right_robstride_port,
-                self.config.left_robstride_port,
+                robstride_ports.right,
+                robstride_ports.left,
                 self.config.right_dynamixel_port,
                 self.config.left_dynamixel_port,
                 robstride_current_limit=self.config.current_limit_robstride,

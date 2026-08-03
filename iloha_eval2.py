@@ -493,9 +493,9 @@ async def main(args):
     print("=" * 60)
     print("ロボットを初期化中...")
     config = IlohaConfig(
-        left_robstride_port="/dev/ttyUSB0",
+        left_robstride_port="auto",
         left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
-        right_robstride_port="/dev/ttyUSB2",
+        right_robstride_port="auto",
         right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
         max_relative_target_1=0.03,
         max_relative_target_2=0.01,
