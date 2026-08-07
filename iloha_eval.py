@@ -31,6 +31,7 @@ CAMERA_MAX_FRAME_AGE_MS = 250
 CAM_HIGH_CROP_SIZE = (480, 640)  # height, width
 RELATIVE_WARMUP_SECONDS = 3.0
 ABSOLUTE_MODE_DELTA_THRESHOLD = 0.2  # rad
+STANDBY_MOTOR_DISABLE_DELAY_SECONDS = 3.0
 
 # カメラ設定（iloha_server.pyと同じ）
 CAMERA_CONFIGS = {
@@ -57,6 +58,83 @@ async def reset_robot_to_home(robot: Iloha, init=True):
     await asyncio.sleep(1.0)
     
     print("初期位置復帰完了")
+
+
+async def stop_motors_for_standby(
+    robot: Iloha,
+    motor_disable_delay_s: float = STANDBY_MOTOR_DISABLE_DELAY_SECONDS,
+) -> None:
+    """接続は維持したまま全モータを停止し、待機中の消費電力を抑える"""
+    if robot.aloha is None:
+        return
+
+    print("待機のためモータを停止しています...")
+    try:
+        await reset_robot_to_home(robot, init=False)
+        print(f"初期位置への復帰完了を待機中（{motor_disable_delay_s:.1f}秒）...")
+        await asyncio.sleep(motor_disable_delay_s)
+
+        arm_controllers = [
+            robot.aloha.right_arm_controller,
+            robot.aloha.left_arm_controller,
+        ]
+        for arm_controller in arm_controllers:
+            if arm_controller is None:
+                continue
+
+            if arm_controller.robstride_controller:
+                await asyncio.gather(
+                    *[
+                        arm_controller.robstride_controller.disable(motor.id)
+                        for motor in arm_controller.robstride_motors
+                    ]
+                )
+
+            if arm_controller.dynamixel_controller:
+                torque_off = {
+                    motor.id: False for motor in arm_controller.dynamixel_motors
+                }
+                await arm_controller.dynamixel_controller.set_torque_enable_async(torque_off)
+
+        print("モータ停止完了。Enterで次のエピソードを開始します。")
+    except Exception as e:
+        print(f"待機用モータ停止エラー: {e}")
+
+
+async def resume_motors_from_standby(robot: Iloha) -> None:
+    """待機で停止したモータを、接続確認やカメラ初期化なしで再有効化する"""
+    if robot.aloha is None:
+        return
+
+    print("モータを再有効化しています...")
+    arm_controllers = [
+        robot.aloha.right_arm_controller,
+        robot.aloha.left_arm_controller,
+    ]
+    for arm_controller in arm_controllers:
+        if arm_controller is None:
+            continue
+
+        if arm_controller.robstride_controller:
+            for motor in arm_controller.robstride_motors:
+                if not await arm_controller.robstride_controller.enable(motor.id):
+                    raise RuntimeError(f"RobStride Motor{motor.id} 有効化失敗")
+
+        if arm_controller.dynamixel_controller:
+            torque_on = {motor.id: True for motor in arm_controller.dynamixel_motors}
+            if not await arm_controller.dynamixel_controller.set_torque_enable_async(torque_on):
+                raise RuntimeError("Dynamixel torque有効化失敗")
+
+    await robot.aloha.set_gripper_current("left", robot.config.current_limit_gripper_L * 1000)
+    await robot.aloha.set_gripper_current("right", robot.config.current_limit_gripper_R * 1000)
+    robot.filtered_joint_angles = None
+    print("モータ再有効化完了")
+
+
+async def wait_for_enter_to_continue() -> None:
+    """asyncioループを止めずにEnter待ちする"""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, input, "待機中です。Enterで次のエピソードを開始します（Ctrl+Cで終了）: ")
 
 
 def initialize_cameras() -> dict:
@@ -415,9 +493,9 @@ async def main(args):
     print("=" * 60)
     print("ロボットを初期化中...")
     config = IlohaConfig(
-        left_robstride_port="/dev/ttyUSB1",
+        left_robstride_port="auto",
         left_dynamixel_port="/dev/ttyUSB_LeftDynamixel",
-        right_robstride_port="/dev/ttyUSB0",
+        right_robstride_port="auto",
         right_dynamixel_port="/dev/ttyUSB_RightDynamixel",
         max_relative_target_1=0.03,
         max_relative_target_2=0.01,
@@ -495,11 +573,19 @@ async def main(args):
     
     # 7. エピソードループ
     print("=" * 60)
-    print(f"{args.num_episodes}エピソードの評価を開始します")
+    if args.num_episodes > 0:
+        print(f"{args.num_episodes}エピソードの評価を開始します")
+    else:
+        print("無制限エピソードの評価を開始します（Ctrl+Cで終了）")
     
+    motors_in_standby = False
     try:
-        for episode_idx in range(args.num_episodes):
-            print(f"\n--- エピソード {episode_idx + 1}/{args.num_episodes} ---")
+        episode_idx = 0
+        while args.num_episodes <= 0 or episode_idx < args.num_episodes:
+            if args.num_episodes > 0:
+                print(f"\n--- エピソード {episode_idx + 1}/{args.num_episodes} ---")
+            else:
+                print(f"\n--- エピソード {episode_idx + 1} ---")
             
             # ポリシーとプロセッサをリセット
             policy.reset()
@@ -532,11 +618,19 @@ async def main(args):
                 else:
                     print(f"エピソード {episode_idx + 1} は0フレームのため保存をスキップしました")
             
-            # 次のエピソードのためにロボットを初期位置に戻す
-            if episode_idx < args.num_episodes - 1:
-                print(f"\n次のエピソードのためにロボットをリセットします...")
+            episode_idx += 1
+            has_next_episode = args.num_episodes <= 0 or episode_idx < args.num_episodes
+            if has_next_episode:
+                await stop_motors_for_standby(
+                    robot,
+                    motor_disable_delay_s=args.standby_motor_disable_delay_s,
+                )
+                motors_in_standby = True
+                await wait_for_enter_to_continue()
+                await resume_motors_from_standby(robot)
+                motors_in_standby = False
                 await reset_robot_to_home(robot, init=False)
-                await asyncio.sleep(2.0)  # リセット後の待機時間
+                await asyncio.sleep(2.0)
     
     except KeyboardInterrupt:
         print("\n中断されました")
@@ -567,7 +661,8 @@ async def main(args):
                 print(f"{name} 切断エラー: {e}")
         
         # ロボットを初期位置に戻して切断
-        await reset_robot_to_home(robot, init=False)
+        if not motors_in_standby:
+            await reset_robot_to_home(robot, init=False)
         await robot.disconnect()
         print("ロボット切断完了")
         
@@ -614,7 +709,7 @@ if __name__ == "__main__":
         "--num_episodes",
         type=int,
         default=1,
-        help="実行するエピソード数（デフォルト: 1）"
+        help="実行するエピソード数。0以下でEnter待ちの無制限ループ（デフォルト: 1）"
     )
     parser.add_argument(
         "--fps",
@@ -657,8 +752,31 @@ if __name__ == "__main__":
         default=ABSOLUTE_MODE_DELTA_THRESHOLD,
         help=f"相対制限を維持する最大差分しきい値rad（デフォルト: {ABSOLUTE_MODE_DELTA_THRESHOLD}）"
     )
+    parser.add_argument(
+        "--standby_motor_disable_delay_s",
+        type=float,
+        default=STANDBY_MOTOR_DISABLE_DELAY_SECONDS,
+        help=f"待機前に初期位置復帰後モータを停止するまでの追加待機秒数（デフォルト: {STANDBY_MOTOR_DISABLE_DELAY_SECONDS}）"
+    )
     
     args = parser.parse_args()
     
     # 非同期でメイン関数を実行
     asyncio.run(main(args))
+
+"""
+uv run --extra xvla iloha_eval.py \
+    --policy_path outputs/train/xvla_iloha-dataset-all/checkpoints/060000/pretrained_model \
+    --dataset_path datasets/iloha-dataset-all \
+    --episode_time_s 20 \
+    --num_episodes 5 \
+    --task "Grab the edge of the towel and fold it twice. Quality: High" --save_data
+
+# 1/3程度の確率で成功
+uv run --extra xvla iloha_eval.py \
+    --policy_path outputs/train/xvla_iloha-dataset-sushi/checkpoints/060000/pretrained_model \
+    --dataset_path datasets/iloha-dataset-sushi \
+    --episode_time_s 20 \
+    --num_episodes 5 \
+    --task "Grab the edge of the towel and fold it twice. Quality: High" --save_data
+"""
