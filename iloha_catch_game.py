@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""iloha_catch_server.pyで記録したエピソードの送信済みアクションを再生する。"""
+"""記録済みエピソードを再生し、初期位置から片腕の遠隔操作へ移行する。"""
 import argparse
 import asyncio
+import json
+import struct
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import numpy as np
+import websockets
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.robots.iloha import Iloha, IlohaConfig
@@ -145,6 +149,119 @@ async def reset_robot_to_home(robot: Iloha, init=True):
     print("初期位置復帰完了")
 
 
+class SingleArmTeleoperation(asyncio.DatagramProtocol):
+    """catch_serverと同じUnity通信形式で、指定した片腕だけを操作する。"""
+
+    def __init__(self, robot: Iloha, color: str):
+        if color not in ("red", "blue"):
+            raise ValueError("colorにはredまたはblueを指定してください")
+        self.robot = robot
+        self.active_arm = slice(0, 7) if color == "red" else slice(7, 14)
+        self.latest_action = None
+        self.first_action_time = None
+        self.connected = False
+
+    def datagram_received(self, data, addr):
+        # mode=1 + little-endian float32 x 14。モードと座標変換は既存サーバーと共通。
+        if len(data) < 57 or data[0] != 1:
+            return
+        angles = np.array(struct.unpack_from("<14f", data, 1), dtype=np.float32)
+        if not np.isfinite(angles).all():
+            return
+        angles[0] += np.pi / 2
+        angles[7] -= np.pi / 2
+        for offset in (0, 7):
+            angles[offset + 1] -= np.pi / 2
+            angles[offset + 2] = -angles[offset + 2] - np.pi / 2
+            angles[offset + 3:offset + 6] *= -1
+        action = np.zeros(14, dtype=np.float32)
+        action[self.active_arm] = angles[self.active_arm]
+        self.latest_action = action
+
+    async def control_robot(self):
+        while True:
+            start = time.perf_counter()
+            if self.latest_action is not None:
+                if self.first_action_time is None:
+                    self.first_action_time = start
+                action = self.latest_action.copy()
+                # 既存サーバー同様、開始3秒間と大きな目標変化では相対制限を使う。
+                use_relative = (
+                    start - self.first_action_time < 3.0
+                    or np.max(np.abs(action - self.robot.old_action)) > 0.2
+                )
+                await self.robot.async_send_action(
+                    action, use_relative=use_relative, use_filter=not use_relative,
+                )
+            await asyncio.sleep(max(0.0, 1.0 / 60.0 - (time.perf_counter() - start)))
+
+    async def websocket_handler(self, websocket):
+        if self.connected:
+            await websocket.close(code=1013, reason="別のクライアントが操作中です")
+            return
+        self.connected = True
+        transport = None
+        control_task = None
+        try:
+            data = json.loads(await websocket.recv())
+            port = data.get("joint_send_port")
+            if type(port) is not int or not 1 <= port <= 65535:
+                raise ValueError("joint_send_portには1〜65535の整数が必要です")
+            transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+                lambda: self, local_addr=("0.0.0.0", port),
+            )
+            async def control_connection():
+                try:
+                    await self.control_robot()
+                except Exception as exc:
+                    print(f"ロボット制御エラー: {exc}")
+                    await websocket.close(code=1011, reason="ロボット制御エラー")
+
+            control_task = asyncio.create_task(control_connection())
+            await websocket.send(json.dumps({"status": "connected", "message": "接続情報受信完了"}))
+            async for message in websocket:
+                command = json.loads(message).get("command")
+                if command == "reset_robot":
+                    control_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await control_task
+                    transport.close()
+                    transport = None
+                    await reset_robot_to_home(self.robot)
+                    self.latest_action = None
+                    self.first_action_time = None
+                    transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+                        lambda: self, local_addr=("0.0.0.0", port),
+                    )
+                    control_task = asyncio.create_task(control_connection())
+                    response = {"status": "reset_complete", "message": "ロボットリセットが完了しました"}
+                elif command == "teleoperation":
+                    response = {"status": "teleoperation_mode", "message": "片腕の遠隔操作が有効です"}
+                else:
+                    response = {"status": "error", "message": f"未対応のコマンド: {command}"}
+                await websocket.send(json.dumps(response))
+        except websockets.exceptions.ConnectionClosed:
+            pass
+        finally:
+            if transport is not None:
+                transport.close()
+            if control_task is not None:
+                control_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await control_task
+            try:
+                await reset_robot_to_home(self.robot)
+            finally:
+                self.latest_action = None
+                self.first_action_time = None
+                self.connected = False
+
+    async def run(self, port: int):
+        async with websockets.serve(self.websocket_handler, "0.0.0.0", port):
+            print(f"片腕の遠隔操作を開始: WebSocketポート{port}。Unityからの接続待機中 (Ctrl+Cで終了)")
+            await asyncio.Future()
+
+
 async def main(args):
     actions, fps = load_episode(args.dataset_path, args.episode_index)
     speed_options = dict(
@@ -189,35 +306,32 @@ async def main(args):
         count = await replay_episode(robot, actions, fps, **speed_options)
         print(f"再生完了: {count}フレーム")
         await reset_robot_to_home(robot, init=False)
+        print(f"操作対象: {args.color}（{'左' if args.color == 'red' else '右'}アーム）")
+        await SingleArmTeleoperation(robot, args.color).run(args.websocket_port)
     finally:
         await robot.disconnect()
         print("ロボット切断完了")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="記録済みエピソードをIlohaで再生")
+    parser = argparse.ArgumentParser(description="記録済みエピソードをIlohaで再生後、片腕の遠隔操作を開始")
+    parser.add_argument("--color", required=True, choices=("red", "blue"), help="遠隔操作するアーム: red=左、blue=右")
+    parser.add_argument("--websocket_port", type=int, default=8080, help="遠隔操作のWebSocketポート（既定: 8080）")
     parser.add_argument("--dataset_path", required=True, help="記録データセットのパス（例: datasets/iloha-0）")
     parser.add_argument("--episode_index", type=int, default=0, help="再生するエピソード番号（0始まり）")
     parser.add_argument("--dry_run", action="store_true", help="ロボットに接続せずデータセットを検証")
     parser.add_argument("--base_speed", type=float, default=1.0, help="全体のベース速度倍率（正数、既定: 1）")
-    parser.add_argument("--max_speedup", type=float, default=1.0,
+    parser.add_argument("--max_speedup", type=float, default=2.0,
                         help="グリッパー動作から離れた区間の追加倍率上限（1以上、既定: 1=無効）")
     parser.add_argument("--gripper_margin", type=float, default=0.5,
                         help="グリッパー動作前後でベース速度を保つ記録時間の秒数（既定: 0.5）")
-    parser.add_argument("--speedup_distance", type=float, default=2.0,
+    parser.add_argument("--speedup_distance", type=float, default=1.0,
                         help="余白の外側から追加倍率上限に達するまでの記録時間の秒数（正数、既定: 2）")
     parser.add_argument("--gripper_threshold", type=float, default=1e-4,
                         help="動作と判定するグリッパー指令のフレーム間変化量の閾値（0以上、既定: 1e-4）")
     try:
         asyncio.run(main(parser.parse_args()))
     except KeyboardInterrupt:
-        print("\n再生を中断しました")
+        print("\nゲームを終了しました")
 
-# uv run iloha_catch_replay.py --dataset_path datasets/iloha-best --base_speed 1.0 --max_speedup 2.0 --gripper_margin 0.5 --speedup_distance 1.0
-
-# 1.5はいける。2.0も行ける。
-
-# iloha-0: 真ん中は取れてる
-# 2: 完璧より
-# 4: ok
-# 5: 完璧
+# uv run iloha_catch_game.py --dataset_path datasets/iloha-best-edited2 --color blue
