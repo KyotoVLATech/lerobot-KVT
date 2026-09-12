@@ -200,11 +200,11 @@ if __name__ == "__main__":
     parser.add_argument("--episode_index", type=int, default=0, help="再生するエピソード番号（0始まり）")
     parser.add_argument("--dry_run", action="store_true", help="ロボットに接続せずデータセットを検証")
     parser.add_argument("--base_speed", type=float, default=1.0, help="全体のベース速度倍率（正数、既定: 1）")
-    parser.add_argument("--max_speedup", type=float, default=1.0,
+    parser.add_argument("--max_speedup", type=float, default=2.0,
                         help="グリッパー動作から離れた区間の追加倍率上限（1以上、既定: 1=無効）")
     parser.add_argument("--gripper_margin", type=float, default=0.5,
                         help="グリッパー動作前後でベース速度を保つ記録時間の秒数（既定: 0.5）")
-    parser.add_argument("--speedup_distance", type=float, default=2.0,
+    parser.add_argument("--speedup_distance", type=float, default=1.0,
                         help="余白の外側から追加倍率上限に達するまでの記録時間の秒数（正数、既定: 2）")
     parser.add_argument("--gripper_threshold", type=float, default=1e-4,
                         help="動作と判定するグリッパー指令のフレーム間変化量の閾値（0以上、既定: 1e-4）")
@@ -213,11 +213,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n再生を中断しました")
 
-# uv run iloha_catch_replay.py --dataset_path datasets/iloha-best --base_speed 1.0 --max_speedup 2.0 --gripper_margin 0.5 --speedup_distance 1.0
-
-# 1.5はいける。2.0も行ける。
-
-# iloha-0: 真ん中は取れてる
-# 2: 完璧より
-# 4: ok
-# 5: 完璧
+# uv run iloha_catch_replay.py --dataset_path datasets/iloha-best-edited2
