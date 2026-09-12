@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Action Timeline Editor</title>
+<style>
+:root{color-scheme:dark;font:14px system-ui;color:#e6edf6;background:#10151f}body{margin:0}header{padding:20px 24px;background:#192231}h1{font-size:22px;margin:0 0 8px}small,.hint{color:#9aaec6}button,input,select{font:inherit;color:inherit;background:#202d40;border:1px solid #435570;border-radius:5px;padding:7px}button{cursor:pointer}button:hover{background:#344b67}button:disabled{opacity:.4;cursor:default}button.active{border-color:#56d6bf;background:#204b4a}#tabs{display:flex;gap:6px;overflow:auto;padding:12px 24px}.toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:12px 24px;border-bottom:1px solid #2b394e}.toolbar label{display:flex;align-items:center;gap:6px}input[type=number]{width:82px}input[type=checkbox]{accent-color:#56d6bf}#destination{flex:1;min-width:250px}.lane{display:flex;border-bottom:1px solid #2b394e}.label{width:155px;flex-shrink:0;padding:15px 10px;box-sizing:border-box;overflow-wrap:anywhere}.label small{display:block;padding:6px 0}canvas{display:block;width:100%;height:105px;touch-action:none;cursor:crosshair}.plot{flex:1;min-width:0}#lanes{margin:0 24px}#status{padding:12px 24px;min-height:22px;color:#65dfc8;white-space:pre-wrap}#status.error{color:#ff9292}.hint{padding:8px 24px;line-height:1.7}#ruler{margin-left:179px;padding-right:24px;display:flex;justify-content:space-between;color:#a3b5cb} .primary{background:#246258}
+</style>
+<header><h1>Action Timeline Editor</h1><small id="dataset"></small></header>
+<nav id="tabs" aria-label="エピソード"></nav>
+<div class="toolbar">
+<label>開始 <input id="start" type="number" min="0" value="0"></label>
+<label>終了（含まない）<input id="end" type="number" min="1" value="30"></label>
+<label>配置先 <input id="target" type="number" min="0" value="30"></label>
+<button id="copy">コピー</button><button id="move">移動</button>
+<label>伸縮後の長さ <input id="length" type="number" min="1" value="30"></label><button id="stretch">伸縮して配置</button>
+<button id="undo">Undo</button><button id="redo">Redo</button>
+</div>
+<div class="toolbar">
+<button id="all">全レーン選択</button><button id="none">選択解除</button>
+<label><input id="original" type="checkbox" checked>元Action（灰色）</label>
+<label><input id="state" type="checkbox">State（橙色・同じ次元番号）</label>
+<label>表示開始 <input id="viewStart" type="number" min="0" value="0"></label>
+<label>表示終了 <input id="viewEnd" type="number" min="1"></label><button id="fit">全体表示</button>
+<select id="dragMode" aria-label="ドラッグ操作"><option value="select">ドラッグ：範囲選択</option><option value="move">ドラッグ：選択範囲を移動</option><option value="copy">ドラッグ：選択範囲をコピー</option></select>
+</div>
+<div class="hint">波形をドラッグして範囲を選択 → 配置先フレームを指定して編集。複数レーンはチェックで選択できます。移動／コピーのドラッグは選択範囲内から開始してください。<br>配置先は上書きされます。移動・伸縮で空いた元の範囲は前後の値で線形補間します。フレーム数・State・時刻は維持されます。</div>
+<div id="ruler"></div><main id="lanes"></main>
+<div class="toolbar"><label for="destination">別名保存先</label><input id="destination" placeholder="datasets/iloha-best-edited"><button id="save" class="primary">データセットを保存</button></div>
+<div id="status" role="status"></div>
+<script>
+const $=id=>document.getElementById(id);let data,selected=new Set([0]),busy=false,drag=null;
+const number=id=>Number($(id).value);
+function message(s,error=false){$('status').textContent=s;$('status').className=error?'error':'';}
+async function api(path,body){const r=await fetch('/api/'+path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});const v=await r.json();if(!r.ok)throw Error(v.error);return v;}
+async function run(fn){if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);try{await fn();}catch(e){message(e.message,true);}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);if(data){$('undo').disabled=!data.undo;$('redo').disabled=!data.redo;}}}
+function accept(v,reset=false){reset=reset||(data&&data.episode!==v.episode);data=v;if(reset){$('start').value=0;$('end').value=Math.min(30,data.action.length);$('target').value=0;$('length').value=Math.min(30,data.action.length);$('viewStart').value=0;$('viewEnd').value=data.action.length;}
+$('dataset').textContent=`${data.root} · ${data.action.length} frames · ${data.fps} fps · ${data.names.length} dimensions`;
+$('tabs').replaceChildren();for(const ep of data.episodes){let b=document.createElement('button');b.textContent=`Episode ${ep}${data.dirty.includes(ep)?' ●':''}`;b.className=ep===data.episode?'active':'';b.onclick=()=>run(async()=>accept(await api('episode',{episode:ep}),true));$('tabs').append(b);}
+$('lanes').replaceChildren();data.names.forEach((name,d)=>{const row=document.createElement('div');row.className='lane';const label=document.createElement('label');label.className='label';const check=document.createElement('input');check.type='checkbox';check.checked=selected.has(d);check.onchange=()=>{check.checked?selected.add(d):selected.delete(d);draw();};label.append(check,document.createTextNode(` ${d}: ${name}`));const range=document.createElement('small');range.id='range'+d;label.append(range);const plot=document.createElement('div');plot.className='plot';const c=document.createElement('canvas');c.dataset.dim=d;c.onpointerdown=e=>pointerDown(e,c,d);c.onpointermove=e=>pointerMove(e,c);c.onpointerup=e=>pointerUp(e,c);c.onpointercancel=()=>{drag=null;draw();};plot.append(c);row.append(label,plot);$('lanes').append(row);});draw();}
+function bounds(){let lo=Math.max(0,Math.min(data.action.length-1,number('viewStart')));let hi=Math.max(lo+1,Math.min(data.action.length,number('viewEnd')));return [lo,hi];}
+function frame(e,c){const [lo,hi]=bounds(),r=c.getBoundingClientRect();return Math.max(lo,Math.min(hi-1,Math.floor(lo+(e.clientX-r.left)/r.width*(hi-lo))));}
+function pointerDown(e,c,d){if(busy)return;const f=frame(e,c),mode=$('dragMode').value;if(mode!=='select'&&(!selected.has(d)||f<number('start')||f>=number('end'))){message('選択レーンのハイライト範囲内からドラッグしてください。',true);return;}c.setPointerCapture(e.pointerId);drag={first:f,last:f,mode};if(mode==='select'){if(!e.shiftKey)selected.clear();selected.add(d);$('start').value=f;$('end').value=f+1;document.querySelectorAll('.lane input').forEach((v,i)=>v.checked=selected.has(i));}draw();}
+function pointerMove(e,c){if(!drag)return;drag.last=frame(e,c);if(drag.mode==='select'){$('start').value=Math.min(drag.first,drag.last);$('end').value=Math.max(drag.first,drag.last)+1;$('length').value=number('end')-number('start');}else{$('target').value=number('start')+drag.last-drag.first;}draw();}
+function pointerUp(e,c){if(!drag)return;pointerMove(e,c);const mode=drag.mode;drag=null;if(mode!=='select')edit(mode);else draw();}
+function draw(){if(!data)return;const [lo,hi]=bounds();$('ruler').replaceChildren();for(let i=0;i<=5;i++){const f=Math.round(lo+(hi-lo)*i/5);const s=document.createElement('small');s.textContent=`${f}f / ${(f/data.fps).toFixed(2)}s`;$('ruler').append(s);}
+document.querySelectorAll('canvas').forEach(c=>{const d=Number(c.dataset.dim),w=c.clientWidth,h=105,ratio=devicePixelRatio||1;c.width=w*ratio;c.height=h*ratio;const ctx=c.getContext('2d');ctx.scale(ratio,ratio);let series=[{a:data.action,color:'#59dac2'}];if($('original').checked)series.unshift({a:data.original,color:'#697990'});if($('state').checked&&data.state&&data.state[0].length>d)series.unshift({a:data.state,color:'#efa765'});let min=Infinity,max=-Infinity;for(const s of series)for(let i=lo;i<hi;i++){min=Math.min(min,s.a[i][d]);max=Math.max(max,s.a[i][d]);}const pad=(max-min)*.1||1;min-=pad;max+=pad;$('range'+d).textContent=`${min.toFixed(3)} … ${max.toFixed(3)}`;const x=f=>(f-lo)/(hi-lo)*w,y=v=>h-10-(v-min)/(max-min)*(h-20);ctx.fillStyle=selected.has(d)?'#172a35':'#141d2a';ctx.fillRect(0,0,w,h);ctx.strokeStyle='#28394a';for(let i=1;i<4;i++){ctx.beginPath();ctx.moveTo(0,h*i/4);ctx.lineTo(w,h*i/4);ctx.stroke();}if(selected.has(d)){ctx.fillStyle='#56d6bf30';ctx.fillRect(x(number('start')),0,x(number('end'))-x(number('start')),h);ctx.strokeStyle='#f5ce70';ctx.beginPath();ctx.moveTo(x(number('target')),0);ctx.lineTo(x(number('target')),h);ctx.stroke();}for(const s of series){ctx.strokeStyle=s.color;ctx.lineWidth=s.a===data.action?1.5:1;ctx.beginPath();for(let i=lo;i<hi;i++){if(i===lo)ctx.moveTo(x(i),y(s.a[i][d]));else ctx.lineTo(x(i),y(s.a[i][d]));}ctx.stroke();}});}
+function edit(op){run(async()=>{accept(await api('edit',{episode:data.episode,op,start:number('start'),end:number('end'),target:number('target'),length:number('length'),dims:[...selected]}));message(`${op} を適用しました。別名保存するまで変更はメモリ内に保持されます。`);});}
+for(const op of ['copy','move','stretch','undo','redo'])$(op).onclick=()=>edit(op);
+for(const id of ['start','end','target','viewStart','viewEnd','original','state'])$(id).onchange=draw;
+$('all').onclick=()=>{selected=new Set(data.names.map((_,i)=>i));accept(data);};$('none').onclick=()=>{selected.clear();accept(data);};$('fit').onclick=()=>{$('viewStart').value=0;$('viewEnd').value=data.action.length;draw();};
+$('save').onclick=()=>run(async()=>{const v=await api('save',{destination:$('destination').value});message(`保存しました: ${v.saved}`);});
+window.addEventListener('resize',draw);window.addEventListener('beforeunload',e=>{if(data?.dirty.length){e.preventDefault();e.returnValue='';}});
+run(async()=>{const v=await api('load');$('destination').value=v.root+'-edited';accept(v,true);message('レーンの波形をドラッグして編集範囲を選択してください。');});
+</script></html>
