@@ -349,7 +349,16 @@ async def main(args):
         max_relative_target_4=0.03,
         max_relative_target_5=0.01,
         max_relative_target_6=0.03,
-        current_limit_robstride={1: 4.0, 2: 16.0, 3: 4.0, 4: 4.0, 5: 16.0, 6: 4.0},
+        # RobstrideのIDは左腕が1・2・3、右腕が4・5・6。根元から先端の順。
+        # 機種はID1・4がRS03（定格20Nm/13Apk、ピーク60Nm/43Apk）、
+        # ID2・5がRS06（定格11Nm/14.3Apk、ピーク36Nm/57Apk）、
+        # ID3・6がRS00（定格5Nm/4.7Apk、ピーク14Nm/15.5Apk）。
+        # vel_max・acc_setの工場出荷値は3機種とも10rad/s・10rad/s^2。
+        # current_limit_robstride={1: 4.0, 2: 16.0, 3: 4.0, 4: 4.0, 5: 16.0, 6: 4.0},
+        current_limit_robstride={1: 10.0, 2: 12.0, 3: 4.0, 4: 10.0, 5: 12.0, 6: 4.0},
+        vel_max_robstride={1: np.pi, 2: np.pi, 3: np.pi, 4: np.pi, 5: np.pi, 6: np.pi},
+        # acc_set_robstride={1: np.pi/2, 2: np.pi/2, 3: np.pi/2, 4: np.pi/2, 5: np.pi/2, 6: np.pi/2},
+        acc_set_robstride={1: 10, 2: 10, 3: 10, 4: 10, 5: 10, 6: 10},
         current_limit_gripper_R=0.5, # 0.3
         current_limit_gripper_L=0.5, # 0.3
     )
