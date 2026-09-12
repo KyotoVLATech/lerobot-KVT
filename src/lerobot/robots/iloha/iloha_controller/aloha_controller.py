@@ -1,4 +1,5 @@
 import asyncio
+import math
 from typing import Any, List, Optional, Union
 
 from .aloha_arm_controller import AlohaArm, AlohaArmController
@@ -17,6 +18,8 @@ class AlohaController:
         right_dynamixel_port: str,
         left_dynamixel_port: str,
         robstride_current_limit: Union[float, dict[int, float]] = 2.0,
+        robstride_vel_max: Union[float, dict[int, float]] = math.pi,
+        robstride_acc_set: Union[float, dict[int, float]] = math.pi / 2,
         right_robstride_constants: Optional[List[Any]] = None,
         right_dynamixel_constants: Optional[List[Any]] = None,
         left_robstride_constants: Optional[List[Any]] = None,
@@ -30,6 +33,9 @@ class AlohaController:
             left_robstride_port: 左アームRobStrideのポート名
             right_dynamixel_port: 右アームDynamixelのポート名
             left_dynamixel_port: 左アームDynamixelのポート名
+            robstride_current_limit: PPモードの電流制限 [A]（一律の値、またはID→値）
+            robstride_vel_max: PPモードの速度制限 [rad/s]（一律の値、またはID→値）
+            robstride_acc_set: PPモードの加速度制限 [rad/s^2]（一律の値、またはID→値）
             right_robstride_constants: 右アーム RobStride設定リスト
             right_dynamixel_constants: 右アーム Dynamixel設定リスト
             left_robstride_constants: 左アーム RobStride設定リスト
@@ -93,6 +99,8 @@ class AlohaController:
             "robstride_constants": right_robstride_constants,
             "dynamixel_constants": right_dynamixel_constants,
             "robstride_current_limit": robstride_current_limit,
+            "robstride_vel_max": robstride_vel_max,
+            "robstride_acc_set": robstride_acc_set,
         }
         self.left_params = {
             "robstride_port": left_robstride_port,
@@ -100,6 +108,8 @@ class AlohaController:
             "robstride_constants": left_robstride_constants,
             "dynamixel_constants": left_dynamixel_constants,
             "robstride_current_limit": robstride_current_limit,
+            "robstride_vel_max": robstride_vel_max,
+            "robstride_acc_set": robstride_acc_set,
         }
 
     async def _initialize_controllers(self) -> None:

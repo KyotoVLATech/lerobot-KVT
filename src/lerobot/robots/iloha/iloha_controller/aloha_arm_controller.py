@@ -58,6 +58,8 @@ class AlohaArmController:
         robstride_constants: List[Any],
         dynamixel_constants: List[Any],
         robstride_current_limit: Union[float, dict[int, float]] = 2.0,
+        robstride_vel_max: Union[float, dict[int, float]] = np.pi,
+        robstride_acc_set: Union[float, dict[int, float]] = np.pi / 2,
     ):
         """
         ALOHAコントローラーを初期化
@@ -65,6 +67,9 @@ class AlohaArmController:
         Args:
             robstride_port: RobStrideのポート名
             dynamixel_port: Dynamixelのポート名
+            robstride_current_limit: PPモードの電流制限 [A]（一律の値、またはID→値）
+            robstride_vel_max: PPモードの速度制限 [rad/s]（一律の値、またはID→値）
+            robstride_acc_set: PPモードの加速度制限 [rad/s^2]（一律の値、またはID→値）
         """
         self.robstride_port = robstride_port
         self.dynamixel_port = dynamixel_port
@@ -97,17 +102,28 @@ class AlohaArmController:
 
         # モーター設定
         self.robstride_current_limit = robstride_current_limit
+        self.robstride_vel_max = robstride_vel_max
+        self.robstride_acc_set = robstride_acc_set
         self._setup_motors()
+
+    @staticmethod
+    def _per_motor(setting: Union[float, dict[int, float]], m_id: int, default: float) -> float:
+        """ID→値の辞書、または全モーター共通の値から、そのIDの設定値を取り出す。"""
+        if isinstance(setting, dict):
+            return setting.get(m_id, default)
+        return setting
 
     def _setup_motors(self) -> None:
         """モーター設定を初期化"""
         def get_limits(m_id):
-            limit = self.robstride_current_limit.get(m_id, 2.0) if isinstance(self.robstride_current_limit, dict) else self.robstride_current_limit
+            limit = self._per_motor(self.robstride_current_limit, m_id, 2.0)
+            vel_max = self._per_motor(self.robstride_vel_max, m_id, np.pi)
+            acc_set = self._per_motor(self.robstride_acc_set, m_id, np.pi / 2)
             return RobStrideLimits(
-                pp_vel_max=np.pi, # PP最大速度 [rad/s]
-                pp_acc_set=np.pi/2,  # PP加速度設定 [rad/s²]
+                pp_vel_max=vel_max, # PP最大速度 [rad/s]
+                pp_acc_set=acc_set,  # PP加速度設定 [rad/s²]
                 pp_limit_cur=limit,  # PP電流制限 [A]
-                csp_limit_spd=1.57,  # CSP速度制限 [rad/s]
+                csp_limit_spd=vel_max,  # CSP速度制限 [rad/s]
                 csp_limit_cur=limit,  # CSP電流制限 [A]
             )
 

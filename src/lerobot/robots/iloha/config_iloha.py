@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass, field
 from lerobot.cameras import CameraConfig
 from ..config import RobotConfig
@@ -16,5 +17,7 @@ class IlohaConfig(RobotConfig):
     max_relative_target_5: float = 0.1 # radians
     max_relative_target_6: float = 0.1 # radians
     current_limit_robstride: dict[int, float] = field(default_factory=lambda: {i: 2.0 for i in range(1, 7)}) # Amperes for RobStride motors 1-6
+    vel_max_robstride: dict[int, float] = field(default_factory=lambda: {i: math.pi for i in range(1, 7)}) # rad/s for RobStride motors 1-6 (PP mode VEL_MAX)
+    acc_set_robstride: dict[int, float] = field(default_factory=lambda: {i: math.pi / 2 for i in range(1, 7)}) # rad/s^2 for RobStride motors 1-6 (PP mode ACC_SET)
     current_limit_gripper_R: float = 0.3 # Amperes
     current_limit_gripper_L: float = 0.3 # Amperes
