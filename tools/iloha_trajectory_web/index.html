@@ -3,7 +3,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Iloha · Trajectory Studio</title><link rel="stylesheet" href="/style.css">
 </head><body>
-<header><div class="brand"><span class="brand-mark">i.</span><div>ILOHA <span class="muted">/</span> TRAJECTORY STUDIO<small>軌道をつなぐ。動きを確かめる。</small></div></div><div class="header-actions"><span class="local-badge">LOCAL · TRACKING MODEL</span><button id="export" disabled>軌道を書き出す ↗</button></div></header>
+<header><div class="brand"><span class="brand-mark">i.</span><div>ILOHA <span class="muted">/</span> TRAJECTORY STUDIO<small>軌道をつなぐ。動きを確かめる。</small></div></div><div class="header-actions"><span class="local-badge">LOCAL · IDEAL TRAJECTORY</span><button id="export" disabled>軌道を書き出す ↗</button></div></header>
 <main>
 <aside class="sources panel">
  <div class="section-heading"><span class="eyebrow">01 / SEQUENCE</span><button id="reload" class="icon-button" title="データセットを再読込">↻</button></div>
@@ -15,36 +15,19 @@
  <label>接続方式<select id="transition"><option value="crossfade">クロスディゾルブ</option><option value="linear">トリム + 線形補間</option><option value="smooth">トリム + 滑らかな補間</option><option value="cut">そのまま接続</option></select></label>
  <label>接続時間 <span class="unit">s · 速度変更後</span><input id="blend" type="number" min="0" max="60" step="0.1" value="1"></label><p id="transition-help" class="subtle"></p></div>
  <details class="project"><summary>プロジェクト / デモ</summary><div class="button-row"><button id="save-project">設定を保存</button><button id="load-project">設定を読込</button></div><button id="demo">動作確認用のデモを読み込む</button><input id="project-file" type="file" accept=".json" hidden></details>
+ <div class="viewer-settings"><label>ベース間隔 <span class="unit">m</span><input id="spacing" type="number" value="0.59" min="0" max="3" step="0.01"></label><button id="normal-speed" class="full-width">各クリップを1倍速にする</button><button id="compute" class="full-width">理想軌道を再作成</button></div>
 </aside>
 <section class="workspace">
- <div class="viewer-head"><div><span class="eyebrow">02 / SPATIAL PREVIEW</span><h2>軌道プレビュー</h2></div><div class="legend"><span><i class="gray"></i>理想 / 全区間</span><span><i class="blue"></i>実軌道の推定 / 現在まで</span></div></div>
- <div class="viewport" id="viewport"><canvas id="scene" aria-label="理想軌道と推定実軌道の3Dビュー。ドラッグで回転、ホイールで拡大縮小" tabindex="0"></canvas>
+ <div class="viewer-head"><div><span class="eyebrow">02 / SPATIAL PREVIEW</span><h2>軌道プレビュー</h2></div><div class="legend"><span><i class="gray"></i>理想 / 全区間</span></div></div>
+ <div class="viewport" id="viewport"><canvas id="scene" aria-label="理想軌道と現在の理想姿勢の3Dビュー。ドラッグで回転、ホイールで拡大縮小" tabindex="0"></canvas>
  <div class="view-tools"><button data-view="perspective" class="active">3D</button><button data-view="front">正面</button><button data-view="top">上面</button><button data-view="side">側面</button><button id="fit">全体表示</button></div>
- <div class="view-flags"><label><input id="show-left" type="checkbox" checked>左腕</label><label><input id="show-right" type="checkbox" checked>右腕</label><label><input id="show-ideal-arm" type="checkbox" checked>理想姿勢</label><label><input id="show-actual-trace" type="checkbox">青い軌跡</label></div>
+ <div class="view-flags"><label><input id="show-left" type="checkbox" checked>左腕</label><label><input id="show-right" type="checkbox" checked>右腕</label><label><input id="show-ideal-arm" type="checkbox" checked>現在の姿勢</label></div>
  <div id="empty" class="empty"><span>↗</span><h2>軌道を読み込んでいます</h2><p>データセットを選んで、動作の比較を始めましょう。</p></div>
  <div class="viewport-caption"><span id="data-label">データ未読込</span><span>ドラッグ：回転 · Shift：移動 · ホイール：拡大</span></div></div>
- <div class="metrics"><div><span>手先の偏差 · 左 / 右</span><strong id="error-now">—</strong></div><div><span>最大偏差</span><strong id="error-max">—</strong></div><div><span>RMS 偏差</span><strong id="error-rms">—</strong></div><div><span>電流／出力上限に到達</span><strong id="saturation">—</strong></div></div>
  <section class="timeline"><div class="transport"><div class="button-row"><button id="restart" title="先頭へ" disabled>↤</button><button id="play" class="primary" disabled>▶ 再生</button><button id="boundary" disabled>境界へ</button><label class="loop"><input id="loop" type="checkbox">ループ</label></div><div class="clock"><strong id="time-now">00:00.000</strong><span>/ <span id="time-total">00:00.000</span></span></div></div>
  <div class="timeline-track" id="timeline-track"><canvas id="timeline-canvas"></canvas><input id="scrub" aria-label="軌道の再生位置" type="range" min="0" max="1" step="0.001" value="0" disabled></div>
- <div class="timeline-foot"><span id="active-clip">再生バーを動かすと姿勢と青い軌跡が連動します</span><label>プレビュー速度<select id="preview-speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></div></section><div id="status" role="status">準備中…</div>
+ <div class="timeline-foot"><span id="active-clip">再生バーを動かすと理想姿勢が連動します</span><label>プレビュー速度<select id="preview-speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></div></section><div id="status" role="status">準備中…</div>
 </section>
-<aside class="inspector panel"><span class="eyebrow">03 / ACTUATOR MODEL</span><h2>追従性能を比較</h2><p class="subtle">閉ループ追従モデル · 慣性と出力制限</p>
- <div class="model-summary"><strong><span id="mass-label" style="display:inline;font:inherit;color:inherit">6</span> kg <small>/ arm</small></strong><span>一様棒 · 関節を点、リンクを線で表示</span></div>
- <div class="two-col"><label>片腕の質量 <span class="unit">kg</span><input id="mass" type="number" value="6" min="0.01" max="100" step="0.1"></label><label>ベース間隔 <span class="unit">m</span><input id="spacing" type="number" value="0.59" min="0" max="3" step="0.01"></label></div>
- <div class="limit-header"><h3>関節ごとの上限</h3><select id="arm-tab" aria-label="制限を設定する腕"><option value="0">左腕</option><option value="1">右腕</option></select></div>
- <div class="limit-columns"><span>関節</span><span>速度<br>rad/s</span><span>加速度<br>rad/s²</span><span>電流<br>A</span><span>Kτ<br>Nm/A</span></div><div id="limits"></div>
- <p class="subtle">加速度0＝電流と慣性から算出。正の値を入力すると追加の加速度上限になります。</p>
- <button id="apply-pp-limits" class="full-width">コードのRobStride PP上限を適用</button><p class="subtle">J1〜J3に速度π・加速度π/2を適用。実機での有効な応答上限と同一とは未確認です。</p>
- <button id="copy-limits" class="full-width">この腕の設定を反対側にも適用</button>
- <label style="margin-top:12px">RobStrideの設定電流の解釈<select id="current-basis"><option value="peak">相電流ピークと仮定（Kτ ÷ √2）</option><option value="rms">相電流実効値と仮定（Kτそのまま）</option></select></label>
- <button id="manufacturer-kt" class="full-width">メーカーKτを適用（速度・電流上限は保持）</button>
- <p class="subtle">RobStrideのCAN Iqの電流換算は実機未確認です。Kτ欄は換算後のNm/Aで、手動調整も可能です。DYNAMIXELは12 Vでのストール比による概算。実機の通常位置モードの電流制限を再現するものではありません。</p>
- <details class="model-details"><summary>関節の型番・メーカー仕様</summary><div id="motor-specs"></div></details>
- <details class="model-details"><summary>追従差と制限の内訳</summary><table class="diagnostics"><thead><tr><th>関節</th><th>最大偏差</th><th>速度<br>制限率</th><th>加速度<br>制限率</th><th>電流<br>制限率</th></tr></thead><tbody id="joint-diagnostics"></tbody></table><p>各制約に到達した計算ステップの割合です。電流は加速分の概算であり、実機の総電流ではありません。</p></details>
- <details class="model-details"><summary>静止分の電流予約（任意）</summary><div id="holding-currents" class="two-col"></div><p>単位A。保持などに使う電流を加速用から差し引きます。0は未予約で、実機の保持電流がゼロという意味ではありません。未予約時の電流余裕は楽観的な仮定です。</p></details>
- <label style="margin-top:15px">終了姿勢の保持 <span class="unit">s</span><input id="hold" type="number" value="2" min="0" max="20" step="0.5"></label>
- <div class="button-row presets"><button id="reset-limits">モデル初期値</button><button id="relax-limits">上限を2倍</button></div><button id="normal-speed" class="full-width">各クリップを1倍速にする</button><button id="compute" class="primary full-width">軌道を再計算</button>
- <details class="model-details"><summary>モデルの前提</summary><p>実機で成立している静止保持を前提に、移動中の位置目標へ追従する閉ループ近似です。6 kgの一様棒は慣性の計算に使用し、未検証の重力計算によって肘が落下するモデルは廃止しました。フレームごとに停止するのではなく、隣接目標から速度を求めて追従します。外部P制御を実機に追加するものではありません。</p><p>加速トルク上限＝max(0, min(Kτ×電流上限, ピークトルク)−Kτ×静止分予約)。加速度＝トルク上限÷姿勢依存の慣性。追加の加速度上限と速度上限も適用します。メーカーPP内部の厳密な再現ではありません。π/2等のPP設定をそのまま物理的な加速度上限とみなすモードはボタンで適用できます。</p><p>青線は実測ではありません。記録コードのobservation.stateは指令を複製しており、これを実測フィードバックとして同定していません。静止支持の破綻、軸間の慣性結合、摩擦、バックラッシュ、通信遅延、トルク速度曲線、熱保護、グリッパー動力学は対象外です。ロール慣性の半径は2 cm、左右ベース間590 mmです。メーカー値の電流換算と未予約の保持電流は不確かさとして残ります。</p></details>
-</aside></main>
-<dialog id="export-dialog"><form id="export-form"><div class="section-heading"><span class="eyebrow">EXPORT / IDEAL TRAJECTORY</span><button type="button" id="close-export" class="icon-button" aria-label="書き出し画面を閉じる">×</button></div><h2>理想軌道をデータセットに保存</h2><p class="subtle">トリミングと境界補間を反映し、元の時間軸で接続します。速度設定・アクチュエータ制限・終了保持は適用しません。</p><div class="two-col"><label>新しいデータセット名<input id="export-name" value="iloha-best-common" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,79}" required></label><label>書き出しFPS<input id="export-fps" type="number" value="30" min="1" max="240" step="1" required></label></div><p class="subtle">接続時間は元データの秒数として適用します。既存データセットは上書きしません。</p><p id="export-summary"></p><button id="export-dataset" type="submit" class="primary full-width">新しいLeRobotデータセットを保存</button><div class="button-row" style="margin-top:10px"><button id="export-settings" type="button">設定JSONをダウンロード</button><button id="export-ideal-json" type="button">理想軌道JSON</button></div><p id="export-result" role="status"></p></form></dialog>
+</main>
+<dialog id="export-dialog"><div class="section-heading"><span class="eyebrow">EXPORT / TRAJECTORY SETTINGS</span><button type="button" id="close-export" class="icon-button" aria-label="書き出し画面を閉じる">×</button></div><h2>実機で再生する設定を書き出す</h2><p class="subtle">使用区間・各クリップの速度・境界のつなぎ方を保存します。実機側が元データセットから同じフレーム列を組み立てるため、データセットの複製は作りません。<strong>画面で再生している軌道がそのまま実機の動きになります。</strong></p><p id="export-summary"></p><button id="export-settings" type="button" class="primary full-width">trajectory_settings.json をダウンロード</button><p class="subtle">リポジトリ直下に置いて、記録済みデータセットのある実機側で実行します。</p><pre class="command">uv run iloha_catch_game2.py --settings trajectory_settings.json --color blue</pre><p class="subtle">先に軌道を再生し、原点復帰のあと片腕の遠隔操作へ移ります。<code>--dry_run</code> で実機に接続せず内容だけ確認できます。</p><p id="export-result" role="status"></p></dialog>
 <script type="module" src="/app.mjs"></script></body></html>

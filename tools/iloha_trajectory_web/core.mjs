@@ -1,24 +1,6 @@
 // Pure numerical code shared by the browser worker and Node regression tests.
 export const LENGTHS = [0.1, 0.305834, 0.2033, 0.0967, 0.07015, 0.03];
 export const ARM_JOINTS = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12];
-// Output-shaft specs. RobStride Kt is published per RMS phase ampere;
-// the default CAN-Iq conversion assumes peak phase amperes (not verified on hardware).
-// DYNAMIXEL coefficients are stall torque/current estimates at 12 V, not continuous ratings.
-export const MOTOR_SPECS = Object.freeze([
-  {model:'RobStride 03',ratedTorque:20,peakTorque:60,ktRms:2.36,gearRatio:9,noLoadRpm:195,voltage:48,source:'https://www.robstride.com/products/robStride03'},
-  {model:'RobStride 06',ratedTorque:11,peakTorque:36,ktRms:1.10,gearRatio:9,noLoadRpm:480,voltage:48,source:'https://www.robstride.com/products/robStride06'},
-  {model:'RobStride 00',ratedTorque:5,peakTorque:14,ktRms:1.48,gearRatio:10,noLoadRpm:315,voltage:48,source:'https://robstride.com/products/robStride00'},
-  {model:'XM540-W270',ratedTorque:null,peakTorque:10.6,stallCurrent:4.4,gearRatio:272.5,noLoadRpm:30,voltage:12,source:'https://emanual.robotis.com/docs/en/dxl/x/xm540-w270/'},
-  {model:'XM540-W270',ratedTorque:null,peakTorque:10.6,stallCurrent:4.4,gearRatio:272.5,noLoadRpm:30,voltage:12,source:'https://emanual.robotis.com/docs/en/dxl/x/xm540-w270/'},
-  {model:'XM430-W350',ratedTorque:null,peakTorque:4.1,stallCurrent:2.3,gearRatio:353.5,noLoadRpm:46,voltage:12,source:'https://emanual.robotis.com/docs/en/dxl/x/xm430-w350/'}
-].map(Object.freeze));
-export function manufacturerKt(joint, basis='peak') {
-  const spec=MOTOR_SPECS[joint%6];
-  return spec.ktRms ? spec.ktRms/(basis==='rms'?1:Math.SQRT2) : spec.peakTorque/spec.stallCurrent;
-}
-export function torqueCapacity(joint, limit) {
-  return Math.min(limit.kt*limit.current,MOTOR_SPECS[joint%6].peakTorque);
-}
 const TAU = 2 * Math.PI;
 export const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const add = (a, b) => a.map((v, i) => v + b[i]);
@@ -78,26 +60,6 @@ export function forward(q, side = 0, spacing = 0.59) {
   const opening = 0.008 + 0.045 * (1-clamp(q[o+6],0,1));
   const fingerAxis = turn(wristAxis, tool, t5);
   return {points, axes, tip, fingers: [add(tip,mul(fingerAxis,opening)), sub(tip,mul(fingerAxis,opening))]};
-}
-
-// Distributed uniform rods, total mass per arm. Integrate distance squared along
-// every downstream segment; retain only the diagonal of the inertia matrix.
-export function rodDynamics(q, side, mass = 6, spacing = 0.59) {
-  const {points, axes} = forward(q, side, spacing);
-  const total = LENGTHS.reduce((s,x)=>s+x,0), inertia = [], gravity = [];
-  for (let j=0; j<6; j++) {
-    let J=0, g=0;
-    for (let k=j; k<6; k++) {
-      const m=mass*LENGTHS[k]/total, r0=sub(points[k],points[j]), r1=sub(points[k+1],points[j]);
-      const a=cross(axes[j],r0), b=cross(axes[j],r1);
-      J += m*(dot(a,a)+dot(a,b)+dot(b,b))/3;
-      // Finite radius regularizes roll-axis inertia of an otherwise thin rod.
-      J += m*0.02**2/2;
-      g += dot(axes[j],cross(mul(add(r0,r1),0.5),[0,0,-9.81*m]));
-    }
-    inertia.push(Math.max(1e-5,J)); gravity.push(g);
-  }
-  return {inertia, gravity};
 }
 
 export function defaultReplaySettings() {
@@ -198,137 +160,51 @@ export function stitch(clips, {mode="crossfade", blend=1, fps=60}={}) {
   return {actions,fps,duration:(actions.length-1)/fps,segments,boundaries};
 }
 
-export function defaultSettings() {
-  return {modelVersion:3,currentBasis:'peak',speed:1,mass:6,spacing:0.59,hold:2,
-    limits:Array.from({length:12},(_,i)=>({velocity:i%6<3?Math.PI:MOTOR_SPECS[i%6].noLoadRpm*TAU/60,
-      acceleration:0,current:i%6===1?16:i%6===5?2.3:4,kt:manufacturerKt(i),holdingCurrent:0}))};
+export function defaultViewSettings() { return {spacing:0.59}; }
+
+export function validateSpacing(spacing) {
+  if(!Number.isFinite(spacing)||spacing<0||spacing>3)throw Error("ベース間隔は0〜3 mです");
 }
 
-export function validateSettings(s) {
-  if(s.currentBasis!==undefined&&!['peak','rms'].includes(s.currentBasis)) throw Error('RobStrideの電流換算が不正です');
-  for(const [key,min,max] of [["speed",0.05,8],["mass",0.01,100],["spacing",0,3],["hold",0,20]])
-    if(!Number.isFinite(s[key])||s[key]<min||s[key]>max) throw Error(`${key} の設定範囲は ${min}〜${max} です`);
-  if(!Array.isArray(s.limits)||s.limits.length!==12) throw Error("12関節の制限が必要です");
-  for(const limit of s.limits) {
-    if(limit.holdingCurrent!==undefined&&(!Number.isFinite(limit.holdingCurrent)||limit.holdingCurrent<0||limit.holdingCurrent>100))throw Error('静止分の予約電流は0〜100 Aです');
-    for(const [key,min,max] of [["velocity",0.001,100],["acceleration",0,1000],["current",0,100],["kt",0.001,100]])
-    if(!Number.isFinite(limit[key])||limit[key]<min||limit[key]>max) throw Error(`${key} の設定範囲は ${min}〜${max} です`);
-  }
+// Accepts the editor's project JSON and the exported trajectory_settings.json alike.
+export function projectView(project) {
+  const editor=project?.version,settings=project?.schema_version;
+  if(![1,2].includes(editor)&&![2,3].includes(settings))throw Error("設定ファイルの形式が違います");
+  // Import legacy edits/speeds and geometry, never the removed actuator model.
+  const spacing=(editor===1?project.settings?.spacing:project.view?.spacing)??0.59;
+  validateSpacing(spacing);
+  return {spacing};
 }
 
-// Incremental closed-loop approximation about an already supported pose.
-// Static equilibrium is supplied by the functioning position controller.
-// Rod inertia restricts acceleration; unverified rod gravity cannot invent sag.
-// holdingCurrent optionally reserves a measured/assumed static-current budget.
-export function motionCapacity(joint, limit, inertia) {
-  const availableTorque=Math.max(0,torqueCapacity(joint,limit)-limit.kt*(limit.holdingCurrent??0));
-  return {torque:availableTorque,
-    velocity:Math.min(limit.velocity,MOTOR_SPECS[joint%6].noLoadRpm*TAU/60),
-    profileAcceleration:limit.acceleration===0?Infinity:limit.acceleration,
-    currentAcceleration:availableTorque/inertia};
+// trajectory_settings.json names its clips "dataset"; project files use "name".
+export function projectClipName(clip) {
+  const name=clip?.name??clip?.dataset;
+  if(typeof name!=="string"||!name)throw Error("設定ファイルにデータセット名がありません");
+  return name;
 }
 
-// Follow a moving reference instead of braking to a stop at every waypoint.
-// This is a closed-loop approximation, not a replica of vendor firmware.
-export function trackingStep(position, velocity, targetStart, targetEnd, dt, capacity) {
-  const targetVelocity=(targetEnd-targetStart)/dt, error=targetStart-position;
-  const accelerationLimit=Math.min(capacity.profileAcceleration,capacity.currentAcceleration);
-  const braking=Math.max(0,Math.sqrt((accelerationLimit*dt)**2+2*accelerationLimit*Math.abs(error))-accelerationLimit*dt);
-  const correction=Math.sign(error)*Math.min(braking,Math.abs(error)/dt);
-  const requestedVelocity=targetVelocity+correction;
-  const wanted=clamp(requestedVelocity,-capacity.velocity,capacity.velocity);
-  const requestedAcceleration=(wanted-velocity)/dt;
-  const acceleration=clamp(requestedAcceleration,-accelerationLimit,accelerationLimit);
-  const nextVelocity=velocity+acceleration*dt;
-  return {position:position+0.5*(velocity+nextVelocity)*dt,velocity:nextVelocity,acceleration,
-    velocityLimited:Math.abs(requestedVelocity)>capacity.velocity+1e-9,
-    accelerationLimited:Math.abs(requestedAcceleration)>capacity.profileAcceleration+1e-9,
-    currentLimited:Math.abs(requestedAcceleration)>capacity.currentAcceleration+1e-9
-      &&capacity.currentAcceleration<=capacity.profileAcceleration};
+export function createPreview(trajectory, spacing=0.59) {
+  validateSpacing(spacing);
+  return {ideal:trajectory.actions, times:trajectory.actions.map((_,i)=>i/trajectory.fps),
+    idealPaths:[0,1].map(side=>trajectory.actions.map(q=>forward(q,side,spacing).tip)),
+    duration:trajectory.duration,fps:trajectory.fps,spacing,
+    segments:trajectory.segments,boundaries:trajectory.boundaries};
 }
 
-export function simulate(trajectory, settings, progress=()=>{}, {substeps=4}={}) {
-  validateSettings(settings);
-  if(!Number.isInteger(substeps)||substeps<1||substeps>64)throw Error('Invalid integration substeps');
-  const fps=60;
-  const motionDuration=trajectory.duration/settings.speed, duration=motionDuration+settings.hold;
-  if(duration*fps>150000) throw Error("再生時間が長すぎます。区間を短くするか速度を上げてください");
-  const count=Math.ceil(duration*fps)+1, times=[],ideal=[],actual=[],currents=[],paths=[[],[]],idealPaths=[[],[]];
-  let q=trajectory.actions[0].slice(), v=Array(14).fill(0);
-  let saturation=0,total=0,maxError=0,sumSquared=0,maxVelocity=0,maxAcceleration=0;
-  const jointStats=ARM_JOINTS.map((_,a)=>({model:MOTOR_SPECS[a%6].model,
-    availableTorque:motionCapacity(a,settings.limits[a],1).torque,
-    maxAngleError:0,saturated:0,velocityLimited:0,accelerationLimited:0,currentLimited:0,
-    maxTorque:0,maxDynamicCurrent:0}));
-  for(let i=0;i<count;i++) {
-    const t=Math.min(i/fps,duration);
-    const desired=sample(trajectory.actions,trajectory.fps,Math.min(t,motionDuration)*settings.speed);
-    let amps=Array(12).fill(0);
-    if(i>0) {
-      const step=(t-times.at(-1))/substeps;
-      for(let k=0;k<substeps;k++) {
-        const dynamics=[rodDynamics(q,0,settings.mass,settings.spacing),rodDynamics(q,1,settings.mass,settings.spacing)];
-        const commandStart=times.at(-1)+k*step, commandEnd=commandStart+step;
-        const targetStart=sample(trajectory.actions,trajectory.fps,Math.min(commandStart,motionDuration)*settings.speed);
-        const targetEnd=sample(trajectory.actions,trajectory.fps,Math.min(commandEnd,motionDuration)*settings.speed);
-        for(let a=0;a<12;a++) {
-          const j=ARM_JOINTS[a], lim=settings.limits[a], d=jointStats[a];
-          const J=dynamics[Math.floor(a/6)].inertia[a%6], capacity=motionCapacity(a,lim,J);
-          const next=trackingStep(q[j],v[j],targetStart[j],targetEnd[j],step,capacity);
-          q[j]=next.position;v[j]=next.velocity;
-          const torque=J*next.acceleration;
-          amps[a]=torque/lim.kt; // incremental current, NOT total/holding current
-          d.maxTorque=Math.max(d.maxTorque,Math.abs(torque));
-          d.maxDynamicCurrent=Math.max(d.maxDynamicCurrent,Math.abs(amps[a]));
-          d.velocityLimited+=Number(next.velocityLimited);
-          d.accelerationLimited+=Number(next.accelerationLimited);
-          d.currentLimited+=Number(next.currentLimited);
-          d.saturated+=Number(next.currentLimited);
-          saturation+=Number(next.currentLimited);total++;
-          maxVelocity=Math.max(maxVelocity,Math.abs(v[j]));
-          maxAcceleration=Math.max(maxAcceleration,Math.abs(next.acceleration));
-        }
-        for(const j of [6,13]) q[j]=targetEnd[j];
-      }
-    }
-    if(!q.every(Number.isFinite)||q.some(x=>Math.abs(x)>1e6)) throw Error("モデルが発散しました。設定を見直してください");
-    times.push(t);ideal.push(desired);actual.push(q.slice());currents.push(amps);
-    for(let side=0;side<2;side++) {
-      for(let j=0;j<6;j++) {
-        const a=side*6+j,index=ARM_JOINTS[a];
-        jointStats[a].maxAngleError=Math.max(jointStats[a].maxAngleError,Math.abs(q[index]-desired[index]));
-      }
-      const p=forward(q,side,settings.spacing).tip, ref=forward(desired,side,settings.spacing).tip;
-      paths[side].push(p);idealPaths[side].push(ref);
-      const e=dot(sub(p,ref),sub(p,ref)); maxError=Math.max(maxError,Math.sqrt(e));sumSquared+=e;
-    }
-    if(i%600===0) progress(i/count);
-  }
-  for(const d of jointStats)for(const key of ['saturated','velocityLimited','accelerationLimited','currentLimited'])d[key]/=Math.max(1,(count-1)*substeps);
-  return {times,ideal,actual,currents,paths,idealPaths,duration,motionDuration,fps,
-    jointStats,modelVersion:3,
-    stats:{maxError,rmsError:Math.sqrt(sumSquared/(count*2)),saturation:total?saturation/total:0,maxVelocity,maxAcceleration},
-    segments:trajectory.segments.map(s=>({...s,start:s.start/settings.speed,end:s.end/settings.speed})),
-    boundaries:trajectory.boundaries.map(b=>({...b,start:b.start/settings.speed,end:b.end/settings.speed}))};
-}
-
-export function createIdealExport(clips, edit, settings, fps=30) {
-  if(!Number.isInteger(fps)||fps<1||fps>240)throw Error("書き出しFPSは1〜240の整数にしてください");
-  // Rebuild from ORIGINAL data. Do not reuse the retimed preview trajectory.
-  const original=clips.map(c=>({...c,replay:{...defaultReplaySettings(),base_speed:1,max_speedup:1}}));
-  const ideal=stitch(original,{...edit,fps});
+// The settings document is the only export: iloha_catch_game2.py rebuilds these
+// exact frames from it, so the robot moves like the preview without a dataset copy.
+export function createTrajectorySettings(clips, edit, trajectory) {
+  if(!clips.length||!trajectory)throw Error("データセットを読み込んでください");
+  const synthetic=clips.filter(c=>c.source.synthetic).map(c=>c.source.name);
+  if(synthetic.length)throw Error(`人工データは実機で再生できません: ${synthetic.join(", ")}`);
   const tasks=[...new Set(clips.map(c=>c.source.task).filter(Boolean))];
-  return {coordinates:"iloha",fps,actions:ideal.actions,task:tasks.join(" → ")||"Merged ideal Iloha trajectory",
-    settings:{schema_version:1,speed_applied:false,actuator_limits_applied:false,
-      clips:clips.map(c=>({dataset:c.source.name,episode:c.source.episode??0,start:c.start,end:c.end,replay:{...c.replay},synthetic:!!c.source.synthetic})),
-      edit:{...edit,fps,time_basis:"original_recording_seconds"},actuator:structuredClone(settings),
-      simulation_model:{version:3,motor_specs:MOTOR_SPECS,current_basis:settings.currentBasis??'custom',
-        control:'moving-reference velocity feedforward with velocity/acceleration/incremental-current saturation',dynamics:'diagonal uniform rod inertia about a supported equilibrium',
-        equilibrium_assumption:'Static holding is supported, based on user observation; holdingCurrent reserves an optional per-joint current budget; no invented gravity-driven collapse',
-        calibration:'Not fitted to measured feedback. Recorded observation.state may duplicate commands.',
-        electrical_assumptions:'RobStride peak/RMS conversion selectable; DYNAMIXEL 12 V stall ratio, not continuous rating; peak cap, no thermal or torque-speed curve simulation'},
-      ideal_segments:ideal.segments,ideal_boundaries:ideal.boundaries,
-      note:"Trimming and transitions only. No replay speed scaling, actuator simulation, or final hold is applied to the dataset."}};
+  return {schema_version:3,kind:"iloha_trajectory",speed_applied:true,
+    clips:clips.map(c=>({dataset:c.source.name,episode:c.source.episode??0,start:c.start,end:c.end,replay:{...c.replay},synthetic:false})),
+    edit:{mode:edit.mode,blend:edit.blend,fps:trajectory.fps,time_basis:"speed_adjusted_seconds"},
+    trajectory:{fps:trajectory.fps,frames:trajectory.actions.length,duration:trajectory.duration,
+      segments:trajectory.segments,boundaries:trajectory.boundaries},
+    task:tasks.join(" → "),coordinates:"iloha",
+    note:"Replay this with iloha_catch_game2.py --settings. Trimming, per-clip speed and transitions are all included."};
 }
 
 export function makeDemo(name="動作確認用デモ A", phase=0) {

@@ -1,10 +1,10 @@
-import {clamp, forward, defaultSettings, defaultReplaySettings, createIdealExport, validateSettings, validateSource, makeDemo, MOTOR_SPECS, manufacturerKt, motionCapacity} from './core.mjs';
+import {clamp, forward, sample, defaultViewSettings, defaultReplaySettings, createTrajectorySettings, validateSpacing, projectView, projectClipName, validateSource, makeDemo} from './core.mjs';
 
 const $=id=>document.getElementById(id);
 const escapeHTML=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num=(x,d=2)=>Number(x).toFixed(d);
 const clock=t=>`${String(Math.floor(t/60)).padStart(2,'0')}:${(t%60).toFixed(3).padStart(6,'0')}`;
-let clips=[],settings=defaultSettings(),computedSettings=settings,result=null,trajectory=null;
+let clips=[],viewSettings=defaultViewSettings(),result=null,trajectory=null;
 let worker=null,revision=0,timer=null,playing=false,currentTime=0,lastFrame=0,dirty=true,needsFit=true;
 let catalogEntries=[];
 const canvas=$('scene'),ctx=canvas.getContext('2d'),timeline=$('timeline-canvas'),tc=timeline.getContext('2d');
@@ -21,32 +21,27 @@ function changed(){setPlaying(false);enableTransport(false);worker?.terminate();
 function compute(){
   clearTimeout(timer);worker?.terminate();setPlaying(false);enableTransport(false);
   if(!clips.length){result=null;trajectory=null;$('empty').hidden=false;$('empty').querySelector('h2').textContent='軌道を追加してください';status('データセットを選択して追加してください');dirty=true;return;}
-  try{validateSettings(settings);}catch(error){status(error.message,true);return;}
-  const id=++revision,started=performance.now(),snapshot=structuredClone(settings);
+  try{validateSpacing(viewSettings.spacing);}catch(error){status(error.message,true);return;}
+  const id=++revision,started=performance.now();
   worker=new Worker('/worker.mjs',{type:'module'});
-  status('軌道を計算しています…');
+  status('理想軌道を作成しています…');
   worker.onmessage=({data})=>{
     if(data.id!==revision)return;
     if(data.error){status(data.error,true);worker?.terminate();return;}
-    if(data.progress!==undefined){status(`追従シミュレーションを計算中… ${Math.round(data.progress*100)}%`);return;}
-    result=data.result;trajectory=data.trajectory;computedSettings=snapshot;
-    window.ilohaStudio={get result(){return result;},get trajectory(){return trajectory;},get clips(){return clips;},get settings(){return settings;},get currentTime(){return currentTime;}};
+    result=data.result;trajectory=data.trajectory;
+    window.ilohaStudio={get result(){return result;},get trajectory(){return trajectory;},get clips(){return clips;},get view(){return viewSettings;},get currentTime(){return currentTime;}};
     currentTime=clamp(currentTime,0,result.duration);$('scrub').max=result.duration;
     $('empty').hidden=true;enableTransport(true);$('time-total').textContent=clock(result.duration);
-    $('error-max').textContent=`${num(result.stats.maxError*1000,1)} mm`;
-    $('error-rms').textContent=`${num(result.stats.rmsError*1000,1)} mm`;
-    $('saturation').textContent=`${num(result.stats.saturation*100,1)} %`;
-    renderDiagnostics();
     $('data-label').textContent=clips.some(c=>c.source.synthetic)?'DEMO · 人工データ':'DATASET · '+clips.map(c=>c.source.name).join(' → ');
     document.querySelectorAll('[data-duration]').forEach(el=>{
       const i=Number(el.dataset.duration),s=result.segments[i];if(s)el.textContent=`再生 ${num(s.end-s.start,2)} s`;
     });
     projectedIdeal=null;if(needsFit){fit();needsFit=false;}dirty=true;
-    status(`計算完了 · ${num(result.motionDuration,2)} s + 終了保持 ${num(settings.hold,1)} s · ${num((performance.now()-started)/1000,2)} sで計算`);
+    status(`理想軌道 · ${num(result.duration,2)} s · ${num((performance.now()-started)/1000,2)} sで作成`);
     worker?.terminate();
   };
-  worker.onerror=event=>{status(`計算に失敗しました: ${event.message}`,true);worker?.terminate();};
-  worker.postMessage({id,clips,settings:snapshot,edit:editSettings()});
+  worker.onerror=event=>{status(`軌道の作成に失敗しました: ${event.message}`,true);worker?.terminate();};
+  worker.postMessage({id,clips,spacing:viewSettings.spacing,edit:editSettings()});
 }
 
 const replayFields=[['base_speed','ベース速度','×',0.05,0.1],['max_speedup','追加倍率上限','×',1,0.1],['gripper_margin','グリッパー前後の余白','s',0,0.1],['speedup_distance','追加倍率までの範囲','s',0.01,0.1],['gripper_threshold','グリッパー動作の判定閾値','',0,0.0001]];
@@ -96,36 +91,9 @@ $('reload').onclick=()=>loadCatalog(clips.length===0);
 $('add').onclick=async()=>{try{$('add').disabled=true;const source=await fetchSource($('dataset').value,Number($('episode').value));clips.push(clipFor(source));renderClips();needsFit=true;changed();}catch(error){status(error.message,true);}finally{$('add').disabled=false;}};
 $('demo').onclick=()=>{clips=[clipFor(makeDemo()),clipFor(makeDemo('動作確認用デモ B',1.2))];renderClips();needsFit=true;changed();};
 
-function renderLimits(){
-  const side=Number($('arm-tab').value);
-  $('limits').innerHTML=Array.from({length:6},(_,j)=>{
-    const i=side*6+j,l=settings.limits[i];return `<div class="limit-row"><span>J${j+1}</span>${['velocity','acceleration','current','kt'].map(key=>`<input type="number" min="${['current','acceleration'].includes(key)?0:0.001}" step="0.1" value="${num(l[key],4).replace(/0+$/,'').replace(/\.$/,'')}" data-limit="${key}" data-joint="${i}" aria-label="${side?'右':'左'} J${j+1} ${key}">`).join('')}</div>`;
-  }).join('');
-  $('holding-currents').innerHTML=Array.from({length:6},(_,j)=>`<label>J${j+1}<input type="number" min="0" max="100" step="0.1" value="${settings.limits[side*6+j].holdingCurrent??0}" data-reserve="${side*6+j}" aria-label="${side?'右':'左'} J${j+1} 静止分の予約電流"></label>`).join('');
-  renderMotorSpecs();
-}
-function renderMotorSpecs(){
-  const side=Number($('arm-tab').value);
-  $('motor-specs').innerHTML=MOTOR_SPECS.map((m,j)=>`<div>J${j+1} · <a href="${m.source}" target="_blank" rel="noopener noreferrer">${m.model}</a> · ${m.ratedTorque===null?'定格未規定':`定格 ${m.ratedTorque} Nm`} / ピーク ${m.peakTorque} Nm<br><small>加速に使える上限 ${num(motionCapacity(j,settings.limits[side*6+j],1).torque)} Nm</small></div>`).join('');
-}
-function renderDiagnostics(){
-  if(!result?.jointStats)return;
-  renderMotorSpecs();
-  const side=Number($('arm-tab').value);
-  $('joint-diagnostics').innerHTML=result.jointStats.slice(side*6,side*6+6).map((d,j)=>`<tr><th>J${j+1}</th><td>${num(d.maxAngleError*180/Math.PI,1)}°</td><td>${num(d.velocityLimited*100,1)}%</td><td>${num(d.accelerationLimited*100,1)}%</td><td>${num(d.currentLimited*100,1)}%</td></tr>`).join('');
-}
-$('arm-tab').onchange=()=>{renderLimits();renderDiagnostics();};
-$('limits').addEventListener('input',e=>{if(!e.target.dataset.limit)return;settings.limits[Number(e.target.dataset.joint)][e.target.dataset.limit]=Number(e.target.value);changed();});
-function renderSettings(){for(const key of ['mass','spacing','hold'])$(key).value=settings[key];$('current-basis').value=settings.currentBasis??'peak';$('mass-label').textContent=settings.mass;renderLimits();}
-$('manufacturer-kt').onclick=()=>{settings.currentBasis=$('current-basis').value;settings.modelVersion=3;settings.limits.forEach((l,i)=>l.kt=manufacturerKt(i,settings.currentBasis));renderLimits();changed();};
-$('current-basis').onchange=()=>$('manufacturer-kt').click();
-for(const key of ['mass','spacing','hold'])$(key).oninput=()=>{settings[key]=Number($(key).value);$('mass-label').textContent=settings.mass;changed();};
-$('holding-currents').oninput=e=>{if(e.target.dataset.reserve===undefined)return;settings.limits[Number(e.target.dataset.reserve)].holdingCurrent=Number(e.target.value);changed();};
-$('apply-pp-limits').onclick=()=>{settings.limits.forEach((l,i)=>{if(i%6<3){l.velocity=Math.PI;l.acceleration=Math.PI/2;}});renderLimits();changed();};
+function renderViewSettings(){$('spacing').value=viewSettings.spacing;}
+$('spacing').oninput=()=>{viewSettings.spacing=Number($('spacing').value);needsFit=true;changed();};
 $('normal-speed').onclick=()=>{for(const c of clips){c.replay.base_speed=1;c.replay.max_speedup=1;}renderClips();changed();};
-$('copy-limits').onclick=()=>{const src=Number($('arm-tab').value)*6,dst=src?0:6;for(let i=0;i<6;i++)settings.limits[dst+i]={...settings.limits[src+i]};changed();};
-$('reset-limits').onclick=()=>{settings=defaultSettings();renderSettings();changed();};
-$('relax-limits').onclick=()=>{for(const l of settings.limits)for(const key of ['velocity','acceleration','current'])l[key]=Math.min(key==='acceleration'?1000:100,l[key]*2);renderLimits();changed();};
 $('compute').onclick=compute;
 function transitionHelp(){
   const descriptions={crossfade:'末尾と先頭を重ね、関節角度を滑らかな重みで混合します。重ねた時間だけ短くなります。',linear:'使用区間の末尾と次の先頭を、関節角度の直線補間で接続します。',smooth:'両端の関節速度に合わせた補間で接続します。位置は端点間からはみ出す場合があります。',cut:'選択区間を続けて再生します。境界の角度差はそのまま残ります。'};
@@ -134,33 +102,30 @@ function transitionHelp(){
 $('transition').onchange=()=>{transitionHelp();changed();};$('blend').oninput=changed;
 
 function download(name,data){const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-$('save-project').onclick=()=>download('iloha-trajectory-project.json',{version:1,settings,edit:editSettings(),clips:clips.map(c=>({name:c.source.name,episode:c.source.episode,start:c.start,end:c.end,replay:c.replay,...(c.source.synthetic?{source:c.source}:{})}))});
+$('save-project').onclick=()=>download('iloha-trajectory-project.json',{version:2,view:viewSettings,edit:editSettings(),clips:clips.map(c=>({name:c.source.name,episode:c.source.episode,start:c.start,end:c.end,replay:c.replay,...(c.source.synthetic?{source:c.source}:{})}))});
 $('load-project').onclick=()=>$('project-file').click();
 $('project-file').onchange=async()=>{
   try{
     const file=$('project-file').files[0];if(!file)return;if(file.size>20000000)throw Error('設定ファイルが大きすぎます');
-    const data=JSON.parse(await file.text());if(data.version!==1||!Array.isArray(data.clips)||data.clips.length>20)throw Error('設定ファイルの形式が違います');
-    validateSettings(data.settings);
-    const next=await Promise.all(data.clips.map(async c=>{const source=c.source||await fetchSource(c.name,c.episode);validateSource(source);return {source,start:c.start,end:c.end,replay:{...defaultReplaySettings(),...c.replay}};}));
-    clips=next;settings={...data.settings,modelVersion:3};delete settings.frequency;delete settings.damping;delete settings.gravity;settings.limits.forEach(l=>l.holdingCurrent??=0);$('transition').value=data.edit.mode;$('blend').value=data.edit.blend;renderClips();renderSettings();transitionHelp();needsFit=true;changed();
+    const data=JSON.parse(await file.text());if(!Array.isArray(data.clips)||!data.clips.length||data.clips.length>20)throw Error('設定ファイルの形式が違います');
+    const nextView=projectView(data);
+    const next=await Promise.all(data.clips.map(async c=>{const source=c.source||await fetchSource(projectClipName(c),c.episode);validateSource(source);return {source,start:c.start,end:c.end,replay:{...defaultReplaySettings(),...c.replay}};}));
+    clips=next;viewSettings=nextView;$('transition').value=data.edit?.mode??'crossfade';$('blend').value=data.edit?.blend??1;renderClips();renderViewSettings();transitionHelp();needsFit=true;changed();
   }catch(error){status(error.message,true);}finally{$('project-file').value='';}
 };
-function idealExport(){return createIdealExport(clips,editSettings(),settings,Number($('export-fps').value));}
-function exportSummary(){try{const p=idealExport();$('export-summary').textContent=`${p.actions.length.toLocaleString()} フレーム · ${p.fps} FPS · ${num((p.actions.length-1)/p.fps,2)} 秒（速度変更なし）`;$('export-dataset').disabled=false;}catch(error){$('export-summary').textContent=error.message;$('export-dataset').disabled=true;}}
+function trajectorySettings(){return createTrajectorySettings(clips,editSettings(),trajectory);}
+function exportSummary(){
+  try{
+    const t=trajectorySettings().trajectory;
+    $('export-summary').textContent=`${t.frames.toLocaleString()} フレーム · ${t.fps} FPS · ${num(t.duration,2)} 秒（速度変更を含む、画面と同じ軌道）`;
+    $('export-settings').disabled=false;
+  }catch(error){$('export-summary').textContent=error.message;$('export-settings').disabled=true;}
+}
 $('export').onclick=()=>{$('export-result').textContent='';exportSummary();$('export-dialog').showModal();};
 $('close-export').onclick=()=>$('export-dialog').close();
-$('export-fps').oninput=exportSummary;
-$('export-settings').onclick=()=>{try{download('trajectory_settings.json',idealExport().settings);}catch(error){$('export-result').textContent=error.message;}};
-$('export-ideal-json').onclick=()=>{try{const p=idealExport();download('iloha-ideal-trajectory.json',{coordinates:p.coordinates,fps:p.fps,actions:p.actions});}catch(error){$('export-result').textContent=error.message;}};
-$('export-form').onsubmit=async event=>{
-  event.preventDefault();$('export-dataset').disabled=true;$('export-result').textContent='保存しています…';
-  try{
-    const payload={...idealExport(),name:$('export-name').value};
-    const response=await fetch('/api/export-dataset',{method:'POST',headers:{'Content-Type':'application/json','X-Iloha-Export':'1'},body:JSON.stringify(payload)});
-    const data=await response.json();if(!response.ok)throw Error(data.error||'保存に失敗しました');
-    $('export-result').textContent=`保存しました: ${data.path}\n${data.frames} フレーム / ${data.fps} FPS\n設定: trajectory_settings.json`;
-    await loadCatalog(false);
-  }catch(error){$('export-result').textContent=error.message;}finally{$('export-dataset').disabled=false;}
+$('export-settings').onclick=()=>{
+  try{download('trajectory_settings.json',trajectorySettings());$('export-result').textContent='trajectory_settings.json を保存しました。リポジトリ直下に置いて上のコマンドを実行してください。';}
+  catch(error){$('export-result').textContent=error.message;}
 };
 
 function seek(t){if(!result)return;currentTime=clamp(t,0,result.duration);dirty=true;}
@@ -169,7 +134,7 @@ $('play').onclick=()=>{if(!result)return;if(currentTime>=result.duration)seek(0)
 $('restart').onclick=()=>{setPlaying(false);seek(0);};
 $('boundary').onclick=()=>{if(!result)return;setPlaying(false);const b=result.boundaries.find(b=>b.start>currentTime+0.05)||result.boundaries[0];if(b)seek(Math.max(0,b.start-0.5));};
 document.addEventListener('keydown',e=>{if(e.code==='Space'&&!['INPUT','SELECT','TEXTAREA','BUTTON','SUMMARY'].includes(e.target.tagName)&&!$('play').disabled){e.preventDefault();$('play').click();}});
-for(const id of ['show-left','show-right','show-ideal-arm','show-actual-trace'])$(id).onchange=()=>{dirty=true;};
+for(const id of ['show-left','show-right','show-ideal-arm'])$(id).onchange=()=>{dirty=true;};
 
 function resize(){
   const dpr=Math.min(devicePixelRatio||1,2),r=canvas.getBoundingClientRect(),tr=timeline.getBoundingClientRect();
@@ -181,8 +146,8 @@ function resize(){
 new ResizeObserver(resize).observe($('viewport'));new ResizeObserver(resize).observe($('timeline-track'));
 function fit(){
   if(!result)return;
-  const min=[-0.05,-settings.spacing/2,0],max=[0.05,settings.spacing/2,0.1];
-  for(const paths of [result.paths,result.idealPaths])for(const path of paths)for(const p of path)for(let j=0;j<3;j++){min[j]=Math.min(min[j],p[j]);max[j]=Math.max(max[j],p[j]);}
+  const min=[-0.05,-result.spacing/2,0],max=[0.05,result.spacing/2,0.1];
+  for(const path of result.idealPaths)for(const p of path)for(let j=0;j<3;j++){min[j]=Math.min(min[j],p[j]);max[j]=Math.max(max[j],p[j]);}
   camera.target=min.map((v,j)=>(v+max[j])/2);camera.distance=Math.max(1.5,Math.hypot(...min.map((v,j)=>max[j]-v))*1.35);camera.pan=[0,0];projectedIdeal=null;dirty=true;
 }
 $('fit').onclick=fit;
@@ -207,41 +172,29 @@ function projection(){
     return [width/2+camera.pan[0]+scale*d.reduce((s,v,i)=>s+v*right[i],0),height/2+camera.pan[1]-scale*d.reduce((s,v,i)=>s+v*up[i],0),depth,scale];};
 }
 function line(points,color,lineWidth=1,dashed=false){if(points.length<2)return;ctx.beginPath();ctx.moveTo(points[0][0],points[0][1]);for(let i=1;i<points.length;i++)ctx.lineTo(points[i][0],points[i][1]);ctx.strokeStyle=color;ctx.lineWidth=lineWidth;ctx.setLineDash(dashed?[4,4]:[]);ctx.stroke();ctx.setLineDash([]);}
-function currentState(){
-  let i=Math.min(Math.floor(currentTime*result.fps),result.times.length-2),u=clamp((currentTime-result.times[i])/(result.times[i+1]-result.times[i]),0,1);
-  const blend=rows=>rows[i].map((v,j)=>v+(rows[i+1][j]-v)*u);
-  return {index:i,ideal:blend(result.ideal),actual:blend(result.actual)};
-}
+function currentState(){return {ideal:sample(result.ideal,result.fps,currentTime)};}
 function drawScene(){
   ctx.clearRect(0,0,width,height);const project=projection();
   for(let k=-10;k<=10;k++) {const p=k/10;line([project([p,-1,0]),project([p,1,0])],k===0?'#d0dbe8':'#e7edf4',k===0?1.1:0.6);line([project([-1,p,0]),project([1,p,0])],k===0?'#d0dbe8':'#e7edf4',k===0?1.1:0.6);}
   if(!result)return;
   const state=currentState();
   if(!projectedIdeal)projectedIdeal=result.idealPaths.map(path=>{const p=new Path2D();path.forEach((v,i)=>{const x=project(v);if(i===0)p.moveTo(x[0],x[1]);else p.lineTo(x[0],x[1]);});return p;});
-  const segments=[],dots=[];
+  const segments=[],dots=[],color='#63748b';
   for(let side=0;side<2;side++){
     if(!$(side?'show-right':'show-left').checked)continue;
     ctx.strokeStyle='#a1a9b6';ctx.globalAlpha=.65;ctx.lineWidth=1.3;ctx.stroke(projectedIdeal[side]);ctx.globalAlpha=1;
-    const actual=forward(state.actual,side,computedSettings.spacing),ideal=forward(state.ideal,side,computedSettings.spacing);
-    if($('show-actual-trace').checked){
-      const trace=result.paths[side].slice(0,state.index+1).map(project);trace.push(project(actual.tip));line(trace,'#347bf0',1.8);
-    }
-    for(const [arm,color,ghost] of [[ideal,'#adb6c4',true],[actual,'#2563eb',false]]){
-      if(ghost&&!$('show-ideal-arm').checked)continue;
+    const arm=forward(state.ideal,side,result.spacing);
+    if($('show-ideal-arm').checked){
       const p=arm.points.map(project);
-      for(let j=0;j<p.length-1;j++)segments.push({points:[p[j],p[j+1]],depth:(p[j][2]+p[j+1][2])/2,color,ghost});
-      segments.push({points:arm.fingers.map(project),depth:p.at(-1)[2],color,ghost});
-      p.forEach((point,j)=>dots.push({point,color,ghost,j,side}));
+      for(let j=0;j<p.length-1;j++)segments.push({points:[p[j],p[j+1]],depth:(p[j][2]+p[j+1][2])/2});
+      segments.push({points:arm.fingers.map(project),depth:p.at(-1)[2]});
+      p.forEach(point=>dots.push(point));
     }
-    const b=project(actual.points[0]);ctx.fillStyle='#8195b1';ctx.font='10px Segoe UI';ctx.fillText(side?'R':'L',b[0]+9,b[1]+15);
-    const delta=Math.hypot(...actual.tip.map((v,j)=>v-ideal.tip[j]));
-    if(delta>.002)line([project(actual.tip),project(ideal.tip)],'#aebed5',.8,true);
+    const b=project(arm.points[0]);ctx.fillStyle='#8195b1';ctx.font='10px Segoe UI';ctx.fillText(side?'R':'L',b[0]+9,b[1]+15);
   }
-  segments.sort((a,b)=>b.depth-a.depth).forEach(s=>line(s.points,s.color,s.ghost?2:3,s.ghost));
-  dots.sort((a,b)=>b.point[2]-a.point[2]).forEach(({point,color,ghost})=>{ctx.beginPath();ctx.arc(point[0],point[1],ghost?3:4.5,0,Math.PI*2);ctx.fillStyle=ghost?'#f7f9fc':color;ctx.fill();ctx.strokeStyle=ghost?color:'white';ctx.lineWidth=ghost?1.4:1.5;ctx.stroke();});
-  const origin=project([-.7,-.7,0]);for(const [axis,label,color] of [[[.15,0,0],'X','#bb8080'],[[0,.15,0],'Y','#83a896'],[[0,0,.15],'Z','#7c99c2']]){const end=project([-.7+axis[0],-.7+axis[1],axis[2]]);line([origin,end],color,1.5);ctx.fillStyle=color;ctx.font='9px Segoe UI';ctx.fillText(label,end[0]+4,end[1]-4);}
-  const errors=[0,1].map(side=>{const p=forward(state.actual,side,computedSettings.spacing).tip,q=forward(state.ideal,side,computedSettings.spacing).tip;return num(Math.hypot(...p.map((v,j)=>v-q[j]))*1000,1);});
-  $('error-now').textContent=`${errors.join(' / ')} mm`;
+  segments.sort((a,b)=>b.depth-a.depth).forEach(s=>line(s.points,color,3));
+  dots.sort((a,b)=>b[2]-a[2]).forEach(point=>{ctx.beginPath();ctx.arc(point[0],point[1],4.5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.strokeStyle='white';ctx.lineWidth=1.5;ctx.stroke();});
+  const origin=project([-.7,-.7,0]);for(const [axis,label,axisColor] of [[[.15,0,0],'X','#bb8080'],[[0,.15,0],'Y','#83a896'],[[0,0,.15],'Z','#7c99c2']]){const end=project([-.7+axis[0],-.7+axis[1],axis[2]]);line([origin,end],axisColor,1.5);ctx.fillStyle=axisColor;ctx.font='9px Segoe UI';ctx.fillText(label,end[0]+4,end[1]-4);}
 }
 function drawTimeline(){
   tc.clearRect(0,0,tw,th);if(!result)return;
@@ -261,10 +214,10 @@ function drawTimeline(){
   $('time-now').textContent=clock(currentTime);$('scrub').value=currentTime;
   const active=result.segments.filter(s=>s.start<=currentTime&&s.end>=currentTime).map(s=>s.name);
   const boundary=result.boundaries.find(b=>b.start<=currentTime&&b.end>=currentTime);
-  $('active-clip').textContent=boundary?'接続区間 · '+active.join(' + '):active.join(' → ')||'終了姿勢を保持';
+  $('active-clip').textContent=boundary?'接続区間 · '+active.join(' + '):active.join(' → ')||'再生終了';
 }
 function frame(now){
   if(playing&&result){const elapsed=Math.min((now-lastFrame)/1000,.2);currentTime+=elapsed*Number($('preview-speed').value);if(currentTime>=result.duration){if($('loop').checked)currentTime%=result.duration;else{currentTime=result.duration;setPlaying(false);}}dirty=true;}
   lastFrame=now;if(dirty){drawScene();drawTimeline();dirty=false;}requestAnimationFrame(frame);
 }
-renderSettings();transitionHelp();resize();requestAnimationFrame(frame);loadCatalog(true);
+renderViewSettings();transitionHelp();resize();requestAnimationFrame(frame);loadCatalog(true);

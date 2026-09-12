@@ -1,26 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {forward,LENGTHS,rodDynamics,stitch,simulate,defaultSettings,defaultReplaySettings,replayIntervals,unwrap,createIdealExport,MOTOR_SPECS,manufacturerKt,torqueCapacity,motionCapacity,trackingStep,validateSettings} from '../tools/iloha_trajectory_web/core.mjs';
+import {forward,LENGTHS,stitch,makeDemo,defaultReplaySettings,replayIntervals,unwrap,createTrajectorySettings,createPreview,defaultViewSettings,projectView,projectClipName,validateSpacing,sample} from '../tools/iloha_trajectory_web/core.mjs';
 
 const near=(a,b,e=1e-8)=>assert.ok(Math.abs(a-b)<e,`${a} != ${b}`);
 const constant=(value,frames=61)=>({name:'fixture',fps:30,coordinates:'iloha',actions:Array.from({length:frames},()=>Array(14).fill(value))});
 const clip=source=>({source,start:0,end:(source.actions.length-1)/source.fps,replay:{...defaultReplaySettings(),max_speedup:1}});
 
-test('dataset export ignores every speed and actuator setting but retains trimming and transition',()=>{
+test('exported settings describe the previewed trajectory, speed settings included',()=>{
   const a=clip(constant(0,121)),b=clip(constant(1,121));a.start=1;a.end=3;b.start=.5;b.end=3.5;
-  const edit={mode:'linear',blend:1},settings=defaultSettings();
-  const first=createIdealExport([a,b],edit,settings,30);
-  a.replay={base_speed:5,max_speedup:6,gripper_margin:10,speedup_distance:3,gripper_threshold:.2};
-  b.replay={base_speed:.2,max_speedup:2,gripper_margin:0,speedup_distance:.1,gripper_threshold:0};
-  settings.limits.forEach(l=>{l.current=0;l.velocity=.01;l.acceleration=.01;});settings.hold=20;settings.mass=50;
-  const second=createIdealExport([a,b],edit,settings,30);
-  assert.deepEqual(first.actions,second.actions);
-  assert.equal(first.actions.length,181); // 2 + 1 + 3 seconds at 30 FPS, inclusive endpoints.
-  near(first.actions[75][0],.5);
-  assert.equal(second.settings.clips[0].replay.base_speed,5);
-  assert.equal(second.settings.actuator.limits[0].current,0);
-  assert.equal(second.settings.speed_applied,false);
-  assert.equal(second.settings.actuator_limits_applied,false);
+  a.replay={base_speed:2,max_speedup:1,gripper_margin:10,speedup_distance:3,gripper_threshold:.2};
+  const edit={mode:'linear',blend:1,fps:30};
+  const trajectory=stitch([a,b],edit);
+  const output=createTrajectorySettings([a,b],edit,trajectory);
+  assert.equal(output.schema_version,3);
+  assert.equal(output.speed_applied,true);
+  // 1 (2 s at 2x) + 1 blend + 3 seconds at 30 FPS, inclusive endpoints.
+  assert.equal(output.trajectory.frames,151);
+  assert.equal(output.trajectory.frames,trajectory.actions.length);
+  near(output.trajectory.duration,5);
+  assert.equal(output.trajectory.fps,30);
+  assert.equal(output.edit.fps,30);
+  assert.deepEqual(output.trajectory.segments,trajectory.segments);
+  assert.deepEqual(output.trajectory.boundaries,trajectory.boundaries);
+  assert.deepEqual(output.clips[0].replay,a.replay);
+  assert.equal(output.clips[0].dataset,'fixture');
+  assert.equal(output.clips[0].start,1);
+});
+
+test('settings export refuses demo data that the robot cannot load',()=>{
+  const demo=clip(makeDemo());
+  const edit={mode:'cut',blend:0,fps:30};
+  assert.throws(()=>createTrajectorySettings([demo],edit,stitch([demo],edit)),/実機/);
+  assert.throws(()=>createTrajectorySettings([],edit,null),/データセット/);
 });
 
 test('FK inverts the reference IK wrist equations and preserves link lengths',()=>{
@@ -52,14 +63,6 @@ test('joint axes agree with finite-difference FK and roll affects fingers',()=>{
   }
   const rolled=q.slice();rolled[5]+=1;
   assert.notDeepEqual(base.fingers,forward(rolled).fingers);
-});
-
-test('distributed rod inertia scales with mass and gravity is potential gradient',()=>{
-  const q=Array(14).fill(.3),a=rodDynamics(q,0,6),b=rodDynamics(q,0,12);
-  a.inertia.forEach((v,j)=>{assert.ok(v>0);near(b.inertia[j],v*2);});
-  const total=LENGTHS.reduce((s,v)=>s+v,0);
-  const potential=q=>{const p=forward(q).points;return LENGTHS.reduce((s,l,j)=>s+6*l/total*9.81*(p[j][2]+p[j+1][2])/2,0);};
-  for(let j=0;j<6;j++){const next=q.slice();next[j]+=1e-6;near(a.gravity[j],-(potential(next)-potential(q))/1e-6,2e-5);}
 });
 
 test('replay speed settings preserve gripper activity and its adjacent intervals',()=>{
@@ -99,111 +102,60 @@ test('angular wrapping is short-path and grippers are not wrapped',()=>{
   const result=unwrap(rows);near(result[1][0]-result[0][0],.2);near(result[1][6],5);
 });
 
-test('supported stationary poses do not invent gravity sag',()=>{
-  const s=defaultSettings();s.hold=3;
-  const t=stitch([clip(constant(.3,31))]),out=simulate(t,s);
-  out.actual.forEach(q=>q.forEach(v=>near(v,.3)));
-  near(out.stats.maxError,0);out.currents.flat().forEach(i=>near(i,0));
-});
-
 test('left/right bases follow Unity right axis and stay 590 mm apart',()=>{
   const q=Array(14).fill(0),left=forward(q,0).points[0],right=forward(q,1).points[0];
   assert.deepEqual(left,[0,-.295,0]);assert.deepEqual(right,[0,.295,0]);near(right[1]-left[1],.59);
 });
 
-test('joint-specific manufacturer values convert RMS only once and cap peak torque',()=>{
-  const s=defaultSettings();
-  assert.deepEqual(MOTOR_SPECS.slice(0,3).map(m=>m.model),['RobStride 03','RobStride 06','RobStride 00']);
-  for(let side=0;side<2;side++) {
-    [2.36,1.10,1.48].forEach((kt,j)=>{near(s.limits[side*6+j].kt,kt/Math.SQRT2);near(manufacturerKt(j,'rms'),kt);});
-    near(s.limits[side*6+3].kt,10.6/4.4);near(s.limits[side*6+5].kt,4.1/2.3);
+
+test('preview contains only ideal poses and full FK paths, with no simulated output',()=>{
+  const src=constant(0,61);src.actions.forEach((q,i)=>q[0]=i/60);
+  const trajectory=stitch([clip(src)]),preview=createPreview(trajectory);
+  assert.equal(preview.ideal,trajectory.actions);
+  near(preview.duration,trajectory.duration);
+  near(preview.times.at(-1),trajectory.duration);
+  assert.equal(preview.times.length,trajectory.actions.length);
+  for(const key of ['actual','actualPaths','stats','currents','jointStats','modelVersion'])assert.equal(key in preview,false);
+  for(let side=0;side<2;side++){
+    assert.equal(preview.idealPaths[side].length,trajectory.actions.length);
+    trajectory.actions.forEach((q,i)=>assert.deepEqual(preview.idealPaths[side][i],forward(q,side,.59).tip));
   }
-  for(let a=0;a<12;a++)near(torqueCapacity(a,{current:100,kt:100}),MOTOR_SPECS[a%6].peakTorque);
-  near(torqueCapacity(2,s.limits[2]),4*1.48/Math.SQRT2);
+  near(sample(preview.ideal,preview.fps,1)[0],.5);
+  near(sample(preview.ideal,preview.fps,preview.duration)[0],1);
 });
 
-test('automatic acceleration derives from torque and inertia; explicit caps remain hard caps',()=>{
-  const l={current:4,kt:1,holdingCurrent:1,velocity:2,acceleration:0};
-  const c=motionCapacity(2,l,.5);near(c.torque,3);near(c.currentAcceleration,6);
-  assert.equal(c.profileAcceleration,Infinity);
-  l.acceleration=.5;assert.equal(motionCapacity(2,l,.5).profileAcceleration,.5);
-  l.holdingCurrent=5;assert.equal(motionCapacity(2,l,.5).torque,0);
-  assert.equal(defaultSettings().limits[3].acceleration,0); // no fictitious DYNAMIXEL PP cap
-  assert.throws(()=>validateSettings({...defaultSettings(),limits:Array(12).fill({...l,acceleration:-1})}));
+test('spacing changes only the geometry, not the ideal angles or timing',()=>{
+  const t=stitch([clip(constant(.3))]),a=createPreview(t,.59),b=createPreview(t,.79);
+  assert.deepEqual(a.ideal,b.ideal);assert.deepEqual(a.times,b.times);
+  near(b.idealPaths[0][0][1]-a.idealPaths[0][0][1],-.1);
+  near(b.idealPaths[1][0][1]-a.idealPaths[1][0][1],.1);
+  assert.deepEqual(defaultViewSettings(),{spacing:.59});
+  for(const value of [-1,4,NaN,Infinity,'0.59'])assert.throws(()=>validateSpacing(value));
 });
 
-test('moving-target feedforward has no waypoint stopping or artificial steady lag',()=>{
-  const cap={profileAcceleration:2,currentAcceleration:10,velocity:3};
-  let p=0,v=1;
-  for(let k=0;k<240;k++){
-    const n=trackingStep(p,v,k/240,(k+1)/240,1/240,cap);
-    p=n.position;v=n.velocity;near(p,(k+1)/240);near(v,1);
-  }
+test('projects retain view geometry while legacy simulator settings are discarded',()=>{
+  assert.deepEqual(projectView({version:1,settings:{spacing:.7,mass:-10,limits:'obsolete'}}),{spacing:.7});
+  assert.deepEqual(projectView({version:1}),{spacing:.59});
+  assert.deepEqual(projectView({version:2,view:{spacing:.8}}),{spacing:.8});
+  assert.throws(()=>projectView({version:3}));
+  assert.throws(()=>projectView({version:2,view:{spacing:-1}}));
 });
 
-test('position is integrated continuously and explicit velocity and acceleration limits hold',()=>{
-  const cap={profileAcceleration:.5,currentAcceleration:10,velocity:.2};
-  let p=0,v=0;
-  for(let k=0;k<480;k++){
-    const n=trackingStep(p,v,k/240,(k+1)/240,1/240,cap);
-    assert.ok(Math.abs(n.acceleration)<=.5+1e-9);assert.ok(Math.abs(n.velocity)<=.2+1e-9);
-    near(n.position-p,(v+n.velocity)/480);p=n.position;v=n.velocity;
-  }
-  assert.ok(p<.5); // must not teleport to the requested position 2
+test('the exported robot settings can be loaded back into the editor',()=>{
+  // trajectory_settings.json carries no view geometry and names clips "dataset".
+  for(const version of [2,3])assert.deepEqual(projectView({schema_version:version}),{spacing:.59});
+  assert.throws(()=>projectView({schema_version:1}),/形式/);
+  assert.throws(()=>projectView({}),/形式/);
+  assert.equal(projectClipName({dataset:'iloha-best'}),'iloha-best');
+  assert.equal(projectClipName({name:'iloha-best'}),'iloha-best');
+  for(const clip of [{},{name:''},{dataset:7},null])assert.throws(()=>projectClipName(clip),/データセット名/);
 });
 
-test('current budget and a static reserve change tracking without changing the ideal data',()=>{
-  const src=constant(0,61);src.actions.forEach((q,i)=>q[2]=i/60);
-  const t=stitch([clip(src)]),low=defaultSettings();low.hold=0;low.limits[2].current=.05;
-  const high=defaultSettings();high.hold=0;
-  const a=simulate(t,low),b=simulate(t,high);
-  assert.ok(a.stats.rmsError>b.stats.rmsError*2);
-  assert.ok(a.jointStats[2].currentLimited>0);
-  a.currents.forEach(row=>assert.ok(Math.abs(row[2])<=.05+1e-9));
-  const reserved=structuredClone(high);reserved.limits[2].holdingCurrent=3.95;
-  const c=simulate(t,reserved);
-  near(c.stats.rmsError,a.stats.rmsError,1e-8);
-  assert.deepEqual(a.ideal,b.ideal);assert.deepEqual(c.ideal,b.ideal);
-});
-
-test('relaxing an explicit acceleration limit improves ramp tracking',()=>{
-  const src=constant(0,91);src.actions.forEach((q,i)=>q[0]=i/90);
-  const t=stitch([clip(src)]),low=defaultSettings();low.hold=0;low.limits[0].acceleration=.1;
-  const high=structuredClone(low);high.limits[0].acceleration=10;
-  const a=simulate(t,low),b=simulate(t,high);
-  assert.ok(a.jointStats[0].accelerationLimited>0);
-  assert.ok(Math.abs(b.actual.at(-1)[0]-1)<Math.abs(a.actual.at(-1)[0]-1));
-});
-
-test('zero incremental current allows no motion from rest',()=>{
-  const src=constant(0,61);src.actions.forEach((q,i)=>q[2]=i/60);
-  const s=defaultSettings();s.limits.forEach(l=>l.current=0);
-  const out=simulate(stitch([clip(src)]),s);
-  out.actual.forEach(q=>q.slice(0,6).forEach(x=>near(x,0)));
-  out.currents.flat().forEach(x=>near(x,0));
-});
-
-test('simulation uses manufacturer peak caps even with excessive user current limits',()=>{
-  const src=constant(0,31);src.actions.forEach((q,i)=>q[2]=q[9]=i>0?2:0);
-  const s=defaultSettings();s.mass=100;s.hold=0;s.limits.forEach(l=>{l.current=100;l.kt=100;});
-  const out=simulate(stitch([clip(src)]),s);
-  out.jointStats.forEach((d,a)=>assert.ok(d.maxTorque<=MOTOR_SPECS[a%6].peakTorque+1e-9));
-  assert.ok(out.stats.saturation>0);
-});
-
-test('time integration converges for a current-limited moving elbow',()=>{
-  const src=constant(0,91);src.actions.forEach((q,i)=>q[2]=.3*Math.sin(i/90*Math.PI));
-  const s=defaultSettings();s.hold=0;s.limits[2].current=.1;
-  const t=stitch([clip(src)]),normal=simulate(t,s),fine=simulate(t,s,()=>{},{substeps:16});
-  assert.ok(Math.abs(normal.actual.at(-1)[2]-fine.actual.at(-1)[2])<.02);
-});
-
-test('ideal export carries model assumptions and reservations separately from ideal actions',()=>{
-  const s=defaultSettings();s.limits[2].holdingCurrent=1;
-  const out=createIdealExport([clip(constant(0))],{mode:'cut',blend:0},s);
-  assert.equal(out.settings.simulation_model.version,3);
-  assert.equal(out.settings.simulation_model.current_basis,'peak');
-  assert.equal(out.settings.simulation_model.motor_specs[1].model,'RobStride 06');
-  assert.equal(out.settings.simulation_model.motor_specs[1].peakTorque,36);
-  assert.equal(out.settings.actuator.limits[2].holdingCurrent,1);
+test('settings export carries edits but no removed simulator model',()=>{
+  const c=clip(constant(0)),edit={mode:'cut',blend:0,fps:60};
+  const output=createTrajectorySettings([c],edit,stitch([c],edit));
+  assert.equal(output.edit.mode,'cut');
+  assert.equal(output.edit.time_basis,'speed_adjusted_seconds');
+  assert.equal(output.coordinates,'iloha');
+  for(const key of ['actuator','simulation_model','actuator_limits_applied','actions'])assert.equal(key in output,false);
 });

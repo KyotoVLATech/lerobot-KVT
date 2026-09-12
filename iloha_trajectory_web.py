@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyarrow>=18,<26"]
 # ///
-"""Local trajectory editor. Run: uv run iloha_trajectory_web.py"""
+"""Local, read-only trajectory editor. Run: uv run iloha_trajectory_web.py"""
 
 from __future__ import annotations
 
@@ -124,6 +124,9 @@ class Handler(SimpleHTTPRequestHandler):
                                                 int(query.get("episode", ["0"])[0])))
             elif request.path.startswith("/api/"):
                 self.json_response({"error": "Unknown endpoint"}, HTTPStatus.NOT_FOUND)
+            elif request.path == "/favicon.ico":
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
             else:
                 # Serve only bundled web assets, never workspace or dataset files.
                 if request.path not in ("/", "/index.html", "/style.css", "/app.mjs", "/core.mjs", "/worker.mjs"):
@@ -136,33 +139,6 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, KeyError, OSError) as exc:
             self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-    def do_POST(self):
-        if urlsplit(self.path).path != "/api/export-dataset":
-            self.json_response({"error": "Unknown endpoint"}, HTTPStatus.NOT_FOUND)
-            return
-        # JSON + explicit header prevents cross-origin form submissions.
-        origin = self.headers.get("Origin")
-        if (self.headers.get("X-Iloha-Export") != "1"
-                or self.headers.get_content_type() != "application/json"
-                or (origin and urlsplit(origin).netloc != self.headers.get("Host"))):
-            self.json_response({"error": "この画面から書き出してください"}, HTTPStatus.FORBIDDEN)
-            return
-        try:
-            size = int(self.headers.get("Content-Length", "0"))
-            if not 0 < size <= 64 * 1024 * 1024:
-                raise ValueError("書き出すデータのサイズが不正です（上限64 MB）")
-            payload = json.loads(self.rfile.read(size))
-            if not isinstance(payload, dict):
-                raise ValueError("書き出しデータの形式が不正です")
-            from iloha_trajectory_dataset import export_dataset
-            self.json_response(export_dataset(self.datasets_root, payload), HTTPStatus.CREATED)
-        except FileExistsError as exc:
-            self.json_response({"error": str(exc)}, HTTPStatus.CONFLICT)
-        except ImportError:
-            self.json_response({"error": "PyArrowが必要です"}, HTTPStatus.SERVICE_UNAVAILABLE)
-        except (ValueError, KeyError, TypeError, OSError) as exc:
-            self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -172,7 +148,7 @@ def main():
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), partial(Handler, datasets_root=args.datasets_root.resolve()))
     print(f"Iloha Trajectory Studio: http://{args.host}:{server.server_port}", flush=True)
-    print(f"Dataset root: {args.datasets_root.resolve()} (source datasets are never overwritten)", flush=True)
+    print(f"Dataset root: {args.datasets_root.resolve()} (read-only; datasets are never modified)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

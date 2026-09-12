@@ -8,7 +8,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from iloha_trajectory_web import JOINT_NAMES, OFFSET, SCALE, catalog, dataset_path, load_episode
-from iloha_trajectory_dataset import export_dataset
 
 
 class DatasetTests(unittest.TestCase):
@@ -54,45 +53,6 @@ class DatasetTests(unittest.TestCase):
         for name in ("../fixture", "..", "/"):
             with self.assertRaises(ValueError):
                 dataset_path(self.root, name)
-
-    def test_export_roundtrip_v3_metadata_and_separate_settings(self):
-        actions = [[i / 10] * 14 for i in range(10)]
-        payload = dict(name="merged", coordinates="iloha", fps=30, actions=actions,
-                       task="Test merged ideal motion", settings={"actuator": {"current": 0}, "replay": {"base_speed": 8}})
-        output = export_dataset(self.root, payload)
-        loaded = load_episode(self.root, "merged", 0)
-        self.assertEqual(output["frames"], 10)
-        self.assertEqual(loaded["task"], payload["task"])
-        for actual, expected in zip(loaded["actions"], actions, strict=True):
-            for a, b in zip(actual, expected, strict=True):
-                self.assertAlmostEqual(a, b, places=6)
-        path = self.root / "merged"
-        saved = json.loads((path / "trajectory_settings.json").read_text())
-        self.assertFalse(saved["speed_applied"])
-        self.assertFalse(saved["actuator_limits_applied"])
-        self.assertEqual(saved["replay"]["base_speed"], 8)
-        self.assertEqual(saved["actuator"]["current"], 0)
-        frame = pq.read_table(path / "data/chunk-000/file-000.parquet").to_pylist()[-1]
-        self.assertAlmostEqual(frame["timestamp"], .3, places=6)
-        self.assertEqual(frame["action"], frame["observation.state"])
-        episode = pq.read_table(path / "meta/episodes/chunk-000/file-000.parquet").to_pylist()[0]
-        self.assertEqual(episode["dataset_to_index"], 10)
-        self.assertEqual(episode["stats/action/count"], [10])
-        self.assertEqual(json.loads((path / "meta/info.json").read_text())["codebase_version"], "v3.0")
-        original = (path / "data/chunk-000/file-000.parquet").read_bytes()
-        with self.assertRaises(FileExistsError):
-            export_dataset(self.root, payload)
-        self.assertEqual(original, (path / "data/chunk-000/file-000.parquet").read_bytes())
-
-    def test_export_rejects_invalid_targets_and_nonfinite_actions(self):
-        payload = dict(name="../escape", coordinates="iloha", fps=30, actions=[[0] * 14] * 2)
-        with self.assertRaises(ValueError):
-            export_dataset(self.root, payload)
-        payload["name"] = "invalid"
-        payload["actions"] = [[float("nan")] * 14] * 2
-        with self.assertRaises(ValueError):
-            export_dataset(self.root, payload)
-        self.assertFalse((self.root / "invalid").exists())
 
 
 if __name__ == "__main__":
