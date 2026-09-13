@@ -28,8 +28,8 @@ def save_dataset(root, request):
     if not isinstance(edits, list) or not 1 <= len(edits) <= 1000:
         raise ValueError('編集を1〜1000件指定してください')
     for edit in edits:
-        if not isinstance(edit, dict) or type(edit.get('joint')) is not int or edit['joint'] not in (1, 2):
-            raise ValueError('左腕 joint_1 または joint_2 を指定してください')
+        if not isinstance(edit, dict) or type(edit.get('joint')) is not int or edit['joint'] not in (1, 2, 8, 9):
+            raise ValueError('左腕 joint_1・joint_2 または右腕 joint_8・joint_9 を指定してください')
         for key in ('center', 'sigma', 'amplitude'):
             if type(edit.get(key)) not in (int, float) or not math.isfinite(edit[key]):
                 raise ValueError('編集値には有限の数値が必要です')

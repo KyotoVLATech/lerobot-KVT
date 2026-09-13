@@ -59,12 +59,29 @@ class SaveTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             save_dataset(self.root, self.request)
 
+    def test_right_arm_roundtrip_and_left_arm_preserved(self):
+        self.request['edits'] = [dict(joint=8, center=.5, sigma=.5, amplitude=.3),
+                                 dict(joint=9, center=.5, sigma=.5, amplitude=-.2)]
+        self.request['update_state'] = True
+        save_dataset(self.root, self.request)
+        original = load_episode(self.root, 'source', 0)['actions']
+        edited = load_episode(self.root, 'edited', 0)['actions']
+        for i in range(3):
+            for j in range(14):
+                delta = {8: .3, 9: -.2}.get(j, 0) * math.exp(-.5*((i/2-.5)/.5)**2)
+                self.assertAlmostEqual(edited[i][j], original[i][j] + delta)
+        self.assertEqual(load_episode(self.root, 'source', 1)['actions'],
+                         load_episode(self.root, 'edited', 1)['actions'])
+        table = pq.read_table(self.root / 'edited/data/file.parquet')
+        np.testing.assert_allclose(np.array(table['observation.state'].to_pylist()) - 1,
+                                   table['action'].to_pylist(), atol=1e-12)
+
     def test_state_delta_and_validation(self):
         self.request['update_state'] = True
         save_dataset(self.root, self.request)
         table = pq.read_table(self.root / 'edited/data/file.parquet')
         np.testing.assert_allclose(np.array(table['observation.state'].to_pylist())-1, table['action'].to_pylist(), atol=1e-12)
-        for key, value in [('sigma', 0), ('center', 10), ('amplitude', float('nan')), ('joint', 8)]:
+        for key, value in [('sigma', 0), ('center', 10), ('amplitude', float('nan')), ('joint', 7)]:
             req = {**self.request, 'name': 'invalid', 'edits': [{**self.request['edits'][0], key: value}]}
             with self.assertRaises(ValueError):
                 save_dataset(self.root, req)

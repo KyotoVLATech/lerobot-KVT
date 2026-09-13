@@ -49,8 +49,9 @@ function draw(){
     for(const point of arm.points){const p=project(point);ctx.beginPath();ctx.arc(...p,4,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();}
     const b=project(arm.points[0]);ctx.fillText(side?'R':'L',b[0]+10,b[1]);
   }
-  const distances=poses.map(q=>{const a=forward(q);return Math.hypot(...a.tip.map((v,i)=>v-a.points[0][i]));});
-  $('distance').textContent=`左腕 ベース→手先：元 ${distances[0].toFixed(3)} m → 編集後 ${distances[1].toFixed(3)} m（差 ${((distances[1]-distances[0])*1000).toFixed(1)} mm）`;
+  const side=Number($('joint').value)>=7?1:0;
+  const distances=poses.map(q=>{const a=forward(q,side);return Math.hypot(...a.tip.map((v,i)=>v-a.points[0][i]));});
+  $('distance').textContent=`${side?'右腕':'左腕'} ベース→手先：元 ${distances[0].toFixed(3)} m → 編集後 ${distances[1].toFixed(3)} m（差 ${((distances[1]-distances[0])*1000).toFixed(1)} mm）`;
   $('time').textContent=`${time.toFixed(3)} / ${source.duration.toFixed(3)} s`;$('scrub').value=time;$('play').textContent=playing?'Ⅱ 一時停止':'▶ 再生';
   const j=Number($('joint').value);$('angles').textContent=`joint_${j}：${(poses[0][j]/rad).toFixed(2)}° → ${(poses[1][j]/rad).toFixed(2)}°`;
   const [c,cw,ch]=context('chart');let low=Infinity,high=-Infinity;for(const rows of [source.actions,edited])for(const q of rows){low=Math.min(low,q[j]/rad);high=Math.max(high,q[j]/rad);}low-=2;high+=2;
