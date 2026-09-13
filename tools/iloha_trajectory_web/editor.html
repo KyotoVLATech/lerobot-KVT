@@ -1,0 +1,14 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Iloha 関節角度編集</title><link rel="stylesheet" href="/style.css">
+<style>aside{overflow:auto}#scene{width:100%;height:430px;touch-action:none}#chart{width:100%;height:160px}label{margin:10px 0}#edits button{margin:4px} .workspace{overflow:auto}output{white-space:pre-line}a{color:#2563eb}</style>
+<header><strong>ILOHA / 関節角度・データセット編集</strong><a href="/">軌道接続へ</a></header><main>
+<aside class="panel sources"><h1>左腕の到達距離を調整</h1><label>データセット<select id="dataset"></select></label><label>エピソード<input id="episode" type="number" min="0" step="1" value="0"></label><button id="load">読み込む（編集をリセット）</button>
+<p>角度は既存ビューと同じIloha座標（度）。時間は元の記録時刻です。</p>
+<label>対象<select id="joint"><option value="1">左腕 joint_1</option><option value="2">左腕 joint_2</option></select></label>
+<label>中心時刻（秒）<input id="center" type="number" value="0" min="0" step="0.01"></label><button id="use-time">現在の時刻を使う</button>
+<label>幅 σ（秒）<input id="sigma" type="number" value="1" min="0.001" step="0.1"></label>
+<label>中心での加算角度（度、負で減算）<input id="amplitude" type="number" value="0" min="-180" max="180" step="1"></label>
+<p class="subtle">Δθ(t) = 角度 × exp(−½((t−中心)/σ)²)。±σで約61%、±3σで約1%です。入力中の調整もプレビューに反映します。</p>
+<button id="apply">この調整を追加</button><button id="undo">最後の調整を取消</button><div id="edits"></div>
+<label><input id="update-state" type="checkbox"> observation.state にも同じ差分を適用</label><p class="subtle">通常はactionのみ変更。チェックすると記録済み状態値も合成編集します。</p>
+<label>新しいデータセット名<input id="name" value="iloha-common-edited" pattern="[A-Za-z0-9][A-Za-z0-9_-]*"></label><button id="save" class="primary">プレビューの内容を別データセットに保存</button><p class="subtle">全エピソードと付随ファイルを複製し、選択エピソードを更新。既存の保存先は上書きしません。</p></aside>
+<section class="workspace"><h2>姿勢・軌道比較</h2><p>灰色：元データ　青：編集後　L：左腕 / R：右腕</p><div class="button-row"><button data-view="3d">3D</button><button data-view="front">正面</button><button data-view="top">上面</button><button data-view="side">側面</button></div><canvas id="scene" aria-label="編集前後のロボット姿勢。ドラッグで回転、ホイールで拡大"></canvas><p id="distance"></p><div class="button-row"><button id="play">▶ 再生</button><output id="time"></output></div><input id="scrub" aria-label="記録時刻" type="range" min="0" max="1" step="0.001" value="0"><h2>選択Jointの角度（度）</h2><canvas id="chart" aria-label="元と編集後の角度の時間変化"></canvas><output id="angles"></output><p class="subtle">距離はベースから手先までの直線距離です。既存のリンクモデルによる可視化で、衝突・実機の動作可否は判定しません。</p><p id="status" role="status">準備中…</p></section></main><script type="module" src="/editor.mjs"></script></html>

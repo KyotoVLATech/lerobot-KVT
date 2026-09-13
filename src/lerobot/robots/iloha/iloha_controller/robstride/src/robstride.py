@@ -602,7 +602,9 @@ class RobStrideController:
             return False
 
         logger.info(f"Setting {name} to {value} {unit} for motor {motor_id}")
-        await self._write_parameter(motor_id, param_index.value, value)
+        # Settings may contain integers (e.g. 10), but these registers require
+        # IEEE 754 floats. _write_parameter chooses the encoding by Python type.
+        await self._write_parameter(motor_id, param_index.value, float(value))
 
         await asyncio.sleep(0.1)
         read_data = await self._read_parameter(motor_id, param_index.value)

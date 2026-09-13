@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyarrow>=18,<26"]
+# dependencies = ["pyarrow>=18,<26", "numpy>=1.24"]
 # ///
-"""Local, read-only trajectory editor. Run: uv run iloha_trajectory_web.py"""
+"""Local trajectory and dataset editor. Run: uv run iloha_trajectory_web.py"""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def data_files(path: Path) -> list[Path]:
 def catalog(root: Path) -> list[dict]:
     entries = []
     for path in sorted(root.iterdir()) if root.is_dir() else []:
-        if not (path / "meta" / "info.json").is_file():
+        if path.name.startswith(".") or not (path / "meta" / "info.json").is_file():
             continue
         try:
             path = dataset_path(root, path.name)
@@ -113,6 +113,29 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        try:
+            if self.path != "/api/save-dataset":
+                self.json_response({"error": "Unknown endpoint"}, HTTPStatus.NOT_FOUND)
+                return
+            origin = self.headers.get("Origin")
+            if origin and origin != "http://" + self.headers.get("Host", ""):
+                raise ValueError("別のサイトからの保存要求は受け付けません")
+            if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                raise ValueError("JSONが必要です")
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 < size <= 1000000:
+                raise ValueError("保存要求のサイズが不正です")
+            from iloha_dataset_edit import save_dataset
+            request = json.loads(self.rfile.read(size))
+            if not isinstance(request, dict):
+                raise ValueError("保存要求の形式が不正です")
+            self.json_response(save_dataset(self.datasets_root, request))
+        except ImportError:
+            self.json_response({"error": "PyArrowとNumPyが必要です。uv run iloha_trajectory_web.py で起動してください。"}, HTTPStatus.SERVICE_UNAVAILABLE)
+        except (ValueError, KeyError, TypeError, OSError) as exc:
+            self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
     def do_GET(self):
         request = urlsplit(self.path)
         try:
@@ -129,7 +152,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.end_headers()
             else:
                 # Serve only bundled web assets, never workspace or dataset files.
-                if request.path not in ("/", "/index.html", "/style.css", "/app.mjs", "/core.mjs", "/worker.mjs"):
+                if request.path not in ("/", "/index.html", "/style.css", "/app.mjs", "/core.mjs", "/worker.mjs", "/editor.html", "/editor.mjs"):
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 super().do_GET()
@@ -148,7 +171,7 @@ def main():
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), partial(Handler, datasets_root=args.datasets_root.resolve()))
     print(f"Iloha Trajectory Studio: http://{args.host}:{server.server_port}", flush=True)
-    print(f"Dataset root: {args.datasets_root.resolve()} (read-only; datasets are never modified)", flush=True)
+    print(f"Dataset root: {args.datasets_root.resolve()} (original datasets preserved; edited copies can be saved)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

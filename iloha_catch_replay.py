@@ -208,8 +208,8 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_path", required=True, help="記録データセットのパス（例: datasets/iloha-0）")
     parser.add_argument("--episode_index", type=int, default=0, help="再生するエピソード番号（0始まり）")
     parser.add_argument("--dry_run", action="store_true", help="ロボットに接続せずデータセットを検証")
-    parser.add_argument("--base_speed", type=float, default=1.0, help="全体のベース速度倍率（正数、既定: 1）")
-    parser.add_argument("--max_speedup", type=float, default=2.0,
+    parser.add_argument("--base_speed", type=float, default=0.8, help="全体のベース速度倍率（正数、既定: 1）")
+    parser.add_argument("--max_speedup", type=float, default=1.8,
                         help="グリッパー動作から離れた区間の追加倍率上限（1以上、既定: 1=無効）")
     parser.add_argument("--gripper_margin", type=float, default=0.5,
                         help="グリッパー動作前後でベース速度を保つ記録時間の秒数（既定: 0.5）")
@@ -222,4 +222,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n再生を中断しました")
 
-# uv run iloha_catch_replay.py --dataset_path datasets/iloha-best-edited2
+# uv run iloha_catch_replay.py --dataset_path datasets/iloha-common

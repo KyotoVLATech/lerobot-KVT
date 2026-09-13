@@ -21,8 +21,8 @@
             "start":0.7,
             "end":34,
             "replay":{
-                "base_speed":1,
-                "max_speedup":1.5,
+                "base_speed":0.8,
+                "max_speedup":1.8,
                 "gripper_margin":0.5,
                 "speedup_distance":1,
                 "gripper_threshold":0.0001

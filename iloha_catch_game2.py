@@ -341,7 +341,7 @@ async def main(args):
         current_limit_robstride={1: 10.0, 2: 12.0, 3: 4.0, 4: 10.0, 5: 12.0, 6: 4.0},
         vel_max_robstride={1: np.pi, 2: np.pi, 3: np.pi, 4: np.pi, 5: np.pi, 6: np.pi},
         # acc_set_robstride={1: np.pi/2, 2: np.pi/2, 3: np.pi/2, 4: np.pi/2, 5: np.pi/2, 6: np.pi/2},
-        acc_set_robstride={1: 10, 2: 10, 3: 10, 4: 10, 5: 10, 6: 10},
+        acc_set_robstride={1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 4},
         current_limit_gripper_R=0.5, # 0.3
         current_limit_gripper_L=0.5, # 0.3
     )
