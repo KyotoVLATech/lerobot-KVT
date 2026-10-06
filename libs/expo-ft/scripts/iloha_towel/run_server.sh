@@ -69,4 +69,5 @@ python train_pi_robo.py \
     --checkpoint_model \
     --checkpoint_buffer \
     --checkpoint_interval=20000 \
-    --run_name=ours_iloha_towel_high_delay5
+    --run_name=ours_iloha_towel_high_delay5 \
+    "$@"

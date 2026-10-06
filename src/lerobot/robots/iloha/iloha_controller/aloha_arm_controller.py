@@ -449,13 +449,13 @@ class AlohaArmController:
                 await asyncio.gather(
                     *[
                         self.robstride_controller.disable(motor_id)
-                        for motor_id in range(1, 4)
+                        for motor_id in self.robstride_controller.motors
                     ]
                 )
 
             # Dynamixelモーター無効化（一括実行）
             if self.dynamixel_controller:
-                torque_off = {motor_id: False for motor_id in range(4, 8)}
+                torque_off = {motor_id: False for motor_id in self.dynamixel_controller.motors}
                 await self.dynamixel_controller.set_torque_enable_async(torque_off)
 
         except Exception as e:

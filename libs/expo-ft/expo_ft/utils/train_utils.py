@@ -2,6 +2,7 @@
 
 import dataclasses
 import logging
+import os
 import pathlib
 from typing import Any, Dict
 
@@ -106,7 +107,9 @@ def set_compilation_cache_dir(tag: str) -> str:
     runs that place the same computation on the same device, so scope the dir by
     driver, learner, and device count (all three decide those placements).
     """
-    cache_dir = epath.Path("~/.cache/jax").expanduser() / f"{tag}-n{jax.device_count()}"
+    cache_override = os.environ.get("JAX_COMPILATION_CACHE_DIR")
+    cache_dir = (epath.Path(cache_override).expanduser() if cache_override else
+                 epath.Path("~/.cache/jax").expanduser() / f"{tag}-n{jax.device_count()}")
     jax.config.update("jax_compilation_cache_dir", str(cache_dir))
     logging.info("JAX compilation cache: %s", cache_dir)
     return str(cache_dir)

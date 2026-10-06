@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 
 from .dynamixel.src.constants import (
     ControlParams,
@@ -12,7 +13,7 @@ class Robstride01Constants:
     """根本のRobStrideの定数"""
 
     ID = 4
-    DEFAULT_OFFSET = 0.0  # デフォルトオフセット [rad]
+    DEFAULT_OFFSET = math.pi  # 機械配置の180度補正 [rad]
 
 
 @dataclass

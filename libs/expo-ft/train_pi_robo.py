@@ -44,6 +44,7 @@ flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_enum("update_type", "episode", ["episode", "step", "batch"], "When to run gradient updates: per episode, per step, or per batch of episodes.")
 flags.DEFINE_integer("num_batch", 1, "Number of episodes per update batch (only used when update_type=batch).")
 flags.DEFINE_integer("num_updates", 0, "Upstream-style fixed number of gradient updates per trigger (episode/step/batch). 0 = derive the count from --step_interval instead.")
+flags.DEFINE_integer("learning_starts_episodes", 10, "Completed episodes before enabling gradient updates; 0 permits first-episode verification.")
 flags.DEFINE_integer("step_interval", 1, "One gradient update per this many collected transitions. update_type=step runs it every step_interval env steps; episode/batch runs the accumulated equivalent at the episode boundary (remainder carries over).")
 flags.DEFINE_integer("batch_size", 64, "Mini batch size.")
 flags.DEFINE_integer("max_steps", 500_000, "Number of training steps.")
@@ -322,6 +323,13 @@ def main(_):
             metrics["batch_info"] = get_batch_info(batch)
             agent = agent.replace(rng=jax.device_put(agent.rng, replicated_sharding))
             agent, update_info = agent.update(agent, batch, FLAGS.utd_ratio, actor_batch)
+            logging.info(
+                "Learner update completed: actor_step=%s critic_step=%s actor_loss=%s critic_loss=%s",
+                int(jax.device_get(agent.actor_train_state.step)),
+                int(jax.device_get(agent.critic.step)),
+                jax.device_get(update_info.get("actor_loss")),
+                jax.device_get(update_info.get("critic_loss")),
+            )
             training_log.record_update_time(time.time() - update_start, metrics)
             for k, v in update_info.items():
                 metrics[f"training/{k}"] = v
@@ -419,7 +427,7 @@ def main(_):
         step_metrics["timing/network_ms"] = env.pop_network_ms()
         timer.tock("total")
         timer.tick("post_step")
-        can_update = training_log.ep_count >= 10 and i >= FLAGS.batch_size
+        can_update = training_log.ep_count >= FLAGS.learning_starts_episodes and i >= FLAGS.batch_size
         if FLAGS.update_type == "step" and can_update:
             if FLAGS.num_updates > 0:
                 run_agent_updates(FLAGS.num_updates, step_metrics)
