@@ -1,0 +1,64 @@
+diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
+index 8e35999..36f3cc6 100644
+--- a/src/openpi/training/config.py
++++ b/src/openpi/training/config.py
+@@ -909,6 +909,59 @@ _CONFIGS = [
+         ).get_freeze_filter(),
+         ema_decay=None,
+     ),
++    # iLoHa (bimanual, ALOHA joint coordinates) finetune for EXPO-FT / RTC-SFT.
++    # Observations come from expo-ft's HDF5 export (scripts/iloha/export_lerobot_to_hdf5.py):
++    # flat keys cam_*_image (CHW uint8), state (14), prompt.
++    # Actions stay absolute joint positions: the expo-ft replay buffer builds chunks from
++    # per-step transformed actions, which is only correct for state-independent transforms.
++    TrainConfig(
++        name="expo_pi05_iloha_lora_finetune_sft_joint",
++        model=pi0_config.Pi0Config(
++            pi05=True,
++            action_dim=32,
++            action_horizon=16,
++            paligemma_variant="gemma_2b_lora",
++            action_expert_variant="gemma_300m_lora",
++        ),
++        data=LeRobotAlohaDataConfig(
++            repo_id="",
++            use_delta_joint_actions=False,
++            adapt_to_pi=True,
++            repack_transforms=_transforms.Group(
++                inputs=[
++                    _transforms.RepackTransform(
++                        {
++                            "images": {
++                                "cam_high": "cam_high_image",
++                                "cam_left_wrist": "cam_left_wrist_image",
++                                "cam_right_wrist": "cam_right_wrist_image",
++                            },
++                            "state": "state",
++                            "actions": "actions",
++                            "prompt": "prompt",
++                        }
++                    )
++                ]
++            ),
++        ),
++        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
++        num_train_steps=20_000,
++        batch_size=64,
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=0,
++            peak_lr=2.5e-5,
++            decay_steps=100_000,
++            decay_lr=2.5e-5,
++        ),
++        freeze_filter=pi0_config.Pi0Config(
++            pi05=True,
++            action_dim=32,
++            action_horizon=16,
++            paligemma_variant="gemma_2b_lora",
++            action_expert_variant="gemma_300m_lora",
++        ).get_freeze_filter(),
++        ema_decay=None,
++    ),
+     # Robomimic (robosuite) finetune. Reuses LeRobotDROIDDataConfig because the
+     # conversion script in scripts/square/convert_robomimic_data_to_lerobot.py
+     # writes the same DROID-style keys (exterior_image_*, wrist_image_left,

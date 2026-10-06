@@ -350,6 +350,35 @@ class AlohaArmController:
         # 一括送信
         await self.dynamixel_controller.set_goal_positions_async(positions_pulse)
 
+    async def read_positions(self) -> list[Optional[float]]:
+        """
+        モーター1〜7の実測位置を update_pos と同じ論理座標(rad)で読み出す。
+        読み出しに失敗したモーターは None。
+
+        RobStride: MECH_POS - offset（2π枝は呼び出し側で指令値にそろえる）
+        Dynamixel: 現在位置パルス（offset除去済み）を rad に変換
+        """
+        assert self.robstride_controller is not None
+        assert self.dynamixel_controller is not None
+
+        async def read_robstride() -> list[Optional[float]]:
+            values = []
+            for motor in self.robstride_motors:
+                raw = await self.robstride_controller.get_parameter(motor.id, ParameterIndex.MECH_POS)
+                values.append(None if raw is None else float(raw) - motor.offset)
+            return values
+
+        robstride_values, pulses = await asyncio.gather(
+            read_robstride(),
+            self.dynamixel_controller.get_present_positions_async(),
+        )
+        dynamixel_values = []
+        for motor in self.dynamixel_motors:
+            pulse = pulses.get(motor.id)
+            ppr = self.dynamixel_controller.motors[motor.id].dynamixel_params.param.PULSE_PER_REVOLUTION
+            dynamixel_values.append(None if pulse is None else pulse / ppr * 2 * math.pi)
+        return robstride_values + dynamixel_values
+
     async def update_motor_pos(self, motor_num: int, target_pos: float) -> None:
         """
         特定のモーターの位置を更新

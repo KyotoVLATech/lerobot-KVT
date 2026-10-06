@@ -163,6 +163,22 @@ class AlohaController:
         else:
             raise ValueError("armは'right'または'left'を指定してください")
 
+    async def read_positions(self) -> tuple[list, list]:
+        """
+        両アームのモーター1〜7の実測位置(rad)を並列に読み出す。
+
+        Returns:
+            (right_positions, left_positions)。読み出し失敗のモーターは None
+        """
+        if self.right_arm_controller is None or self.left_arm_controller is None:
+            raise RuntimeError("コントローラーが初期化されていません")
+
+        right, left = await asyncio.gather(
+            self.right_arm_controller.read_positions(),
+            self.left_arm_controller.read_positions(),
+        )
+        return right, left
+
     async def set_gripper_current(self, arm: str, current_mA: float) -> None:
         """
         指定したアームのグリッパーの電流を設定

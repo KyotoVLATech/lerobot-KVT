@@ -170,6 +170,30 @@ class Iloha():
         self.old_action = final_action.copy()
         return action
 
+    async def async_read_joint_state(self) -> np.ndarray:
+        """
+        モータから実測した関節角を old_action と同じ座標系（14要素：L側7要素 + R側7要素）で返す。
+        - グリッパー: async_send_action の motor7 = -g*π/3 の逆変換
+        - 腕関節: 2πの枝を直近の指令値(old_action)にそろえる
+        - 読み出しに失敗した要素、または debug 時は old_action の値を使う
+        """
+        if self.debug or self.aloha is None:
+            return self.old_action.copy()
+
+        right, left = await self.aloha.read_positions()
+        measured = self.old_action.astype(np.float64).copy()
+        for base, arm in ((0, left), (7, right)):
+            for i, value in enumerate(arm):
+                if value is None:
+                    continue
+                idx = base + i
+                if i == 6:
+                    measured[idx] = -value * 3.0 / np.pi
+                else:
+                    ref = measured[idx]
+                    measured[idx] = value + 2 * np.pi * np.round((ref - value) / (2 * np.pi))
+        return measured.astype(np.float32)
+
     def _unwrap_angle_target(self, current: np.ndarray, old: np.ndarray) -> np.ndarray:
         """
         新しい目標角度(current)を、古い角度(old)に最も近い連続的な値に変換（アンラップ）します。
