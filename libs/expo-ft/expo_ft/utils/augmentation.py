@@ -1,13 +1,21 @@
 """Image augmentation utilities for Pi training."""
 
-from typing import Callable, Dict
+from collections.abc import Callable
 
 import augmax
 import jax
 import jax.numpy as jnp
 
 
-def batched_openpi_augmentation(rng, image_dict: Dict[str, jnp.ndarray]) -> Dict[str, jnp.ndarray]:
+def _image_keys(rng, batch_size, sample_offset=0, total_batch_size=None):
+    """Slice the original full-batch key stream, preserving augmentation draws."""
+    total = batch_size if total_batch_size is None else total_batch_size
+    keys = jax.random.split(rng, 2 * total)
+    return jax.lax.dynamic_slice_in_dim(keys, 2 * sample_offset, 2 * batch_size)
+
+
+def batched_openpi_augmentation(rng, image_dict: dict[str, jnp.ndarray],
+                               sample_offset=0, total_batch_size=None) -> dict[str, jnp.ndarray]:
     """Apply same image augmentation as openpi preprocess_observation.
 
     image_dict has base_0_rgb, left_wrist_0_rgb in [-1, 1] float32.
@@ -34,7 +42,7 @@ def batched_openpi_augmentation(rng, image_dict: Dict[str, jnp.ndarray]) -> Dict
         augmax.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
     ]
 
-    sub_rngs = jax.random.split(rng, 2 * base.shape[0])
+    sub_rngs = _image_keys(rng, base.shape[0], sample_offset, total_batch_size)
     base_rngs = sub_rngs[0::2]
     wrist_rngs = sub_rngs[1::2]
 
@@ -60,7 +68,8 @@ def random_crop(key, img: jnp.ndarray, padding: int) -> jnp.ndarray:
     return jax.lax.dynamic_slice(padded_img, crop_from, img.shape)
 
 
-def batched_random_crop_per_image(key, obs: jnp.ndarray, padding: int = 4) -> jnp.ndarray:
+def batched_random_crop_per_image(key, obs: jnp.ndarray, padding: int = 4,
+                                  sample_offset=0, total_batch_size=None) -> jnp.ndarray:
     """Apply random crop independently to each image in obs.
 
     obs is (B, H, W, 6) = [base_0_rgb (3 ch), left_wrist_0_rgb (3 ch)].
@@ -68,7 +77,7 @@ def batched_random_crop_per_image(key, obs: jnp.ndarray, padding: int = 4) -> jn
     """
     base = obs[..., :3]
     wrist = obs[..., 3:6]
-    keys = jax.random.split(key, 2 * obs.shape[0])
+    keys = _image_keys(key, obs.shape[0], sample_offset, total_batch_size)
     keys_base = keys[0::2]
     keys_wrist = keys[1::2]
     base = jax.vmap(random_crop, (0, 0, None))(keys_base, base, padding)
@@ -76,12 +85,14 @@ def batched_random_crop_per_image(key, obs: jnp.ndarray, padding: int = 4) -> jn
     return jnp.concatenate([base, wrist], axis=-1)
 
 
-def batched_crop_only_augmentation(rng, image_dict: Dict[str, jnp.ndarray]) -> Dict[str, jnp.ndarray]:
+def batched_crop_only_augmentation(rng, image_dict: dict[str, jnp.ndarray],
+                                  sample_offset=0, total_batch_size=None) -> dict[str, jnp.ndarray]:
     """Apply only random crop (padding=12) independently to base and wrist."""
     base = image_dict["base_0_rgb"]
     wrist = image_dict["left_wrist_0_rgb"]
     obs = jnp.concatenate([base, wrist], axis=-1)
-    obs = batched_random_crop_per_image(rng, obs, padding=12)
+    obs = batched_random_crop_per_image(rng, obs, padding=12,
+                                       sample_offset=sample_offset, total_batch_size=total_batch_size)
     return dict(
         image_dict,
         base_0_rgb=obs[..., :3],
@@ -91,12 +102,12 @@ def batched_crop_only_augmentation(rng, image_dict: Dict[str, jnp.ndarray]) -> D
 
 def make_data_augmentation_fn(
     use_full_augmentation: bool = True,
-) -> Callable[[jax.Array, Dict[str, jnp.ndarray]], Dict[str, jnp.ndarray]]:
+) -> Callable[..., dict[str, jnp.ndarray]]:
     """Return rng-keyed augmentation fn for learner create()."""
 
-    def data_augmentation_fn(rng, image_dict):
+    def data_augmentation_fn(rng, image_dict, sample_offset=0, total_batch_size=None):
         if use_full_augmentation:
-            return batched_openpi_augmentation(rng, image_dict)
-        return batched_crop_only_augmentation(rng, image_dict)
+            return batched_openpi_augmentation(rng, image_dict, sample_offset, total_batch_size)
+        return batched_crop_only_augmentation(rng, image_dict, sample_offset, total_batch_size)
 
     return data_augmentation_fn

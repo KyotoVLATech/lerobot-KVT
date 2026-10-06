@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Real-Time EXPO-FT オンラインRL用 Iloha ロールアウトクライアント
 
 構成（expo-ft の client/run_client.py と同じサーバ・クライアント方式）:
@@ -19,7 +18,7 @@
   prompt:      タスク指示文
 行動は ALOHA 座標の絶対関節角 14次元。
 
-成功・失敗判定はキーボード入力（エピソード中に s+Enter で成功、f+Enter で失敗）。
+成功・失敗判定はキーボード入力（エピソード中に 1+Enter で成功、0+Enter で失敗）。
 --episode_time_s を超えると失敗として終了する。
 
 使い方:
@@ -39,7 +38,6 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import msgpack
@@ -47,11 +45,6 @@ import numpy as np
 import websockets
 import websockets.asyncio.client as ws_client
 
-from lerobot.robots.iloha import Iloha, IlohaConfig
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.feature_utils import build_dataset_frame
-from lerobot.datasets.video_utils import VideoEncodingManager
-from iloha_mapping import JOINT_NAMES, aloha_to_iloha, iloha_to_aloha
 from iloha_eval import (
     ABSOLUTE_MODE_DELTA_THRESHOLD,
     CAMERA_CONFIGS,
@@ -65,7 +58,11 @@ from iloha_eval import (
     resume_motors_from_standby,
     stop_motors_for_standby,
 )
-
+from iloha_mapping import JOINT_NAMES, aloha_to_iloha, iloha_to_aloha
+from lerobot.datasets.feature_utils import build_dataset_frame
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.video_utils import VideoEncodingManager
+from lerobot.robots.iloha import Iloha, IlohaConfig
 
 # RTC-SFT 学習時と同じ（Quality ラベルは学習時に除去済み）
 DEFAULT_PROMPT = TASK
@@ -122,7 +119,7 @@ def resize_with_pad(img: np.ndarray, height: int, width: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 class KeyboardInput:
     def __init__(self):
-        self._lines: "queue.Queue[str]" = queue.Queue()
+        self._lines: queue.Queue[str] = queue.Queue()
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
@@ -133,7 +130,7 @@ class KeyboardInput:
         while not self._lines.empty():
             self._lines.get_nowait()
 
-    def poll(self) -> Optional[str]:
+    def poll(self) -> str | None:
         """未処理の入力行を1つ返す（無ければ None）。ブロックしない"""
         try:
             return self._lines.get_nowait()
@@ -153,13 +150,12 @@ class IlohaRLEnv:
     """expo-ft の DroidEnv と同じ契約（reset / step / get_observation / get_info_for_step）を
     Iloha 実機で提供する。reward は成功時のみ 1、done 時は mask=0。"""
 
-    def __init__(self, robot: Iloha, keyboard: KeyboardInput, args, dataset: Optional[LeRobotDataset] = None):
+    def __init__(self, robot: Iloha, keyboard: KeyboardInput, args, dataset: LeRobotDataset | None = None):
         self.robot = robot
         self.keyboard = keyboard
         self.args = args
         self.dataset = dataset
         self.prompt = args.task
-        self.max_episode_steps = int(round(args.episode_time_s * args.fps))
         self.state_names = JOINT_NAMES
         self.ds_features = self._dataset_features()
 
@@ -171,7 +167,7 @@ class IlohaRLEnv:
     def _reset_episode_state(self):
         self.steps = 0
         self.episode_start_t = None
-        self.verdict: Optional[bool] = None  # True=成功, False=失敗, None=継続中
+        self.verdict: bool | None = None  # True=成功, False=失敗, None=継続中
         self.last_obs_raw = None
         self.frames_saved = 0
 
@@ -181,7 +177,7 @@ class IlohaRLEnv:
             "observation.state": {"dtype": "float32", "shape": (14,), "names": JOINT_NAMES},
             "action": {"dtype": "float32", "shape": (14,), "names": JOINT_NAMES},
         }
-        for key in CAMERA_CONFIGS.keys():
+        for key in CAMERA_CONFIGS:
             features[f"observation.images.{key}"] = {
                 "dtype": "video", "shape": (480, 640, 3), "names": ("height", "width", "channels"),
             }
@@ -208,7 +204,7 @@ class IlohaRLEnv:
         self.keyboard.clear()
         self.episode_idx += 1
         print(f"\n--- エピソード {self.episode_idx} 開始（最大{self.args.episode_time_s:.0f}秒）---")
-        print("  判定: s+Enter=成功 / f+Enter=失敗（時間切れは失敗）")
+        print("  判定: 1+Enter=成功 / 0+Enter=失敗（時間切れは失敗）")
         return await self.get_observation()
 
     def _finish_episode(self):
@@ -253,12 +249,14 @@ class IlohaRLEnv:
         if self.verdict is None:
             key = self.keyboard.poll()
             while key is not None and self.verdict is None:
-                if key in ("s", "success"):
+                if key == "1":
                     self.verdict = True
-                elif key in ("f", "fail", "failure"):
+                elif key == "0":
                     self.verdict = False
                 key = self.keyboard.poll()
-            if self.verdict is None and self.steps >= self.max_episode_steps:
+            elapsed = (0.0 if self.episode_start_t is None
+                       else time.perf_counter() - self.episode_start_t)
+            if self.verdict is None and elapsed >= self.args.episode_time_s:
                 print(f"エピソード時間（{self.args.episode_time_s}秒）に達しました → 失敗")
                 self.verdict = False
         done = self.verdict is not None
@@ -269,17 +267,22 @@ class IlohaRLEnv:
 
     # --- action -----------------------------------------------------------
     async def step(self, action) -> dict:
-        action_aloha = np.asarray(action, dtype=np.float32)[:14]
+        # Re-check locally: inference may have taken the episode past its deadline.
+        if self.get_info_for_step()[0]:
+            return {"executed_action": iloha_to_aloha(self.robot.old_action).astype(np.float64)}
+        action_aloha = np.asarray(action, dtype=np.float32)
+        if action_aloha.shape != (14,):
+            raise ValueError(f"Expected a 14D action, got {action_aloha.shape}")
         # Learner はプランが無いとき全0、無効時は全-1を送る。DROIDの速度指令なら無害だが、
         # 絶対関節角では遠い姿勢への急移動になるため現在姿勢を保持する。
+        if self.episode_start_t is None:
+            self.episode_start_t = time.perf_counter()
         hold = (not np.isfinite(action_aloha).all()
                 or np.all(action_aloha == 0.0)
                 or np.allclose(action_aloha, -1.0))
         if hold:
             return {"executed_action": iloha_to_aloha(self.robot.old_action).astype(np.float64)}
 
-        if self.episode_start_t is None:
-            self.episode_start_t = time.perf_counter()
         elapsed = time.perf_counter() - self.episode_start_t
 
         action_iloha = aloha_to_iloha(action_aloha)

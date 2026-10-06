@@ -25,6 +25,8 @@ class BatchProcessor:
         actor_success_only: bool,
         use_dagger_hil_sampling: bool,  # True for RTCLearner: actor batch from HIL chunks only
         dataset=None,
+        replay_prefetch=3,
+        host_batches=False,
     ):
         if dataset is not None:
             # offline_ratio=0: seed demos into the online replay buffer only.
@@ -41,11 +43,14 @@ class BatchProcessor:
         self.offline_ratio = offline_ratio
         self.actor_success_only = actor_success_only
         self.use_dagger_hil_sampling = use_dagger_hil_sampling
+        self.host_batches = host_batches
 
         replay_batch_multiplier = 1.0 if use_dagger_hil_sampling else (1 - offline_ratio)
         self.replay_iterator = replay_buffer.get_iterator(
+            queue_size=replay_prefetch,
             sample_args={
                 "batch_size": int(batch_size * utd_ratio * replay_batch_multiplier),
+                "host_batch": host_batches,
             },
             data_sharding=data_sharding,
         )
@@ -53,8 +58,10 @@ class BatchProcessor:
         self.offline_iterator = None
         if offline_ratio > 0 and not use_dagger_hil_sampling:
             self.offline_iterator = offline_replay_buffer.get_iterator(
+                queue_size=replay_prefetch,
                 sample_args={
                     "batch_size": int(batch_size * utd_ratio * offline_ratio),
+                    "host_batch": host_batches,
                 },
                 data_sharding=data_sharding,
             )
@@ -62,7 +69,8 @@ class BatchProcessor:
         self.hil_iterator = None
         if use_dagger_hil_sampling:
             self.hil_iterator = replay_buffer.get_iterator(
-                sample_args={"batch_size": batch_size, "hil_only": True},
+                queue_size=replay_prefetch,
+                sample_args={"batch_size": batch_size, "hil_only": True, "host_batch": host_batches},
                 data_sharding=data_sharding,
             )
 
@@ -92,6 +100,15 @@ class BatchProcessor:
 
     def next_batch(self, combine_rng):
         """Return (critic_batch, actor_batch, new_rng) for one update step."""
+        if self.host_batches:
+            # Mixed replay uses JAX concatenate/shuffle; keep those on CPU too.
+            cpu = jax.devices("cpu")[0]
+            combine_rng = jax.device_put(combine_rng, cpu)
+            with jax.default_device(cpu):
+                return self._next_batch(combine_rng)
+        return self._next_batch(combine_rng)
+
+    def _next_batch(self, combine_rng):
         if self.use_dagger_hil_sampling or self.offline_ratio == 0:
             batch = next(self.replay_iterator)
             new_rng = combine_rng
@@ -103,25 +120,28 @@ class BatchProcessor:
             clear_batch(online_batch)
             clear_batch(offline_batch)
 
-        batch = self.replay_buffer.apply_data_sharding(batch, self.data_sharding)
+        if not self.host_batches:
+            batch = self.replay_buffer.apply_data_sharding(batch, self.data_sharding)
 
         actor_batch = None
         if self.use_dagger_hil_sampling:
             actor_batch = next(self.hil_iterator)
-            actor_batch = self.replay_buffer.apply_data_sharding(actor_batch, self.data_sharding)
+            if not self.host_batches:
+                actor_batch = self.replay_buffer.apply_data_sharding(actor_batch, self.data_sharding)
         elif self.actor_success_only:
             actor_batch = self._sample_success_actor_batch(new_rng)
             if actor_batch is not None:
                 new_rng_parts = jax.random.split(new_rng)
                 new_rng = new_rng_parts[0]
-                actor_batch = self.replay_buffer.apply_data_sharding(
-                    actor_batch, self.data_sharding
-                )
+                if not self.host_batches:
+                    actor_batch = self.replay_buffer.apply_data_sharding(
+                        actor_batch, self.data_sharding
+                    )
 
         return batch, actor_batch, new_rng
 
     def _sample_buffer(self, buffer, batch_size, **sample_kwargs):
-        raw = buffer.sample_jax(batch_size, **sample_kwargs)
+        raw = buffer.sample_jax(batch_size, host_batch=self.host_batches, **sample_kwargs)
         if raw is None:
             return None
         return buffer._convert_to_openpi_format(raw)
@@ -144,4 +164,3 @@ class BatchProcessor:
         return self._sample_buffer(
             self.offline_replay_buffer, self.batch_size, success_only=True
         )
-

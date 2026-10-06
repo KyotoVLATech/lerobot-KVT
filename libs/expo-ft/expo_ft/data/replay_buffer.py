@@ -2,6 +2,7 @@ import collections
 import logging
 import os
 import pickle as std_pickle
+import tempfile
 from typing import Any, Dict, Optional, Tuple, Union
 
 import cloudpickle
@@ -12,12 +13,18 @@ import numpy as np
 import tqdm
 
 from expo_ft.data.dataset import Dataset, DatasetDict
-from expo_ft.agents.alg.batch_utils import CRITIC_CAMERA_KEYS
+from expo_ft.utils.camera_keys import CRITIC_CAMERA_KEYS
 import openpi.training.config as _config
 import openpi.transforms as _transforms
 
 
 ALL_CAMERA_KEYS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+
+
+def _sample_start_indices(size, capacity, insert_index, window):
+    """Physical starts whose full next-state window is present, oldest first."""
+    oldest = insert_index if size == capacity else 0
+    return (np.arange(size - window) + oldest) % capacity
 
 # Row gathers dominate next_batch (~2 GB/s single-threaded for the image tensors).
 # numpy drops the GIL inside np.take, so splitting the rows across threads gets
@@ -81,7 +88,7 @@ def _insert_recursively(
 
 
 def create_replay_buffer(config, example_action, capacity, task_description, replan_steps, seed, delay=0,
-                         critic_camera_keys=CRITIC_CAMERA_KEYS):
+                         critic_camera_keys=CRITIC_CAMERA_KEYS, storage_dir=None):
     """Build pi05 config and create a seeded PiReplayBuffer."""
     from expo_ft.utils.train_utils import build_pi05_config
     _, pi05_train_config, pi05_resize_size, _ = build_pi05_config(config)
@@ -97,6 +104,7 @@ def create_replay_buffer(config, example_action, capacity, task_description, rep
         delay=delay,
         critic_camera_keys=critic_camera_keys,
         valids_keep_terminal_windows=config.get("valids_keep_terminal_windows", False),
+        storage_dir=storage_dir,
     )
     buf.seed(seed)
     return buf
@@ -147,6 +155,7 @@ class PiReplayBuffer(Dataset):
         delay: int = 0,
         critic_camera_keys: Tuple[str, ...] = CRITIC_CAMERA_KEYS,
         valids_keep_terminal_windows: bool = False,
+        storage_dir: str | None = None,
     ):
         data_config = pi_train_config.data.create(pi_train_config.assets_dirs, pi_train_config.model)
         model_config = pi_train_config.model
@@ -158,11 +167,25 @@ class PiReplayBuffer(Dataset):
         max_token_len = model_config.max_token_len
         raw_action_dim = example_action.shape[-1]
 
+        self._image_storage = None
+        if storage_dir:
+            os.makedirs(storage_dir, exist_ok=True)
+            self._image_storage = tempfile.TemporaryDirectory(prefix="replay-", dir=storage_dir)
+
+        def allocate_image(name, shape):
+            if self._image_storage is None:
+                return np.empty(shape, dtype=np.uint8)
+            # Sparse, disk-backed arrays keep identical values/indexing/dtypes.
+            # Only written frames occupy SSD space; the full capacity is preserved.
+            return np.lib.format.open_memmap(
+                os.path.join(self._image_storage.name, f"{name}.npy"),
+                mode="w+", dtype=np.uint8, shape=shape,
+            )
 
         dataset_dict = dict(
-            base_image=np.empty((capacity, *image_shape), dtype=np.uint8),
-            left_wrist_image=np.empty((capacity, *wrist_image_shape), dtype=np.uint8),
-            right_wrist_image=np.empty((capacity, *wrist_image_shape), dtype=np.uint8),
+            base_image=allocate_image("base", (capacity, *image_shape)),
+            left_wrist_image=allocate_image("left_wrist", (capacity, *wrist_image_shape)),
+            right_wrist_image=allocate_image("right_wrist", (capacity, *wrist_image_shape)),
             base_image_mask=np.empty((capacity,), dtype=bool),
             left_wrist_image_mask=np.empty((capacity,), dtype=bool),
             right_wrist_image_mask=np.empty((capacity,), dtype=bool),
@@ -436,9 +459,10 @@ class PiReplayBuffer(Dataset):
         return _take_rows(arr, indices, out=out)
 
     def sample_jax(self, batch_size: int, keys=None, data_sharding=None,
-                       hil_only: bool = False, success_only: bool = False):
+                       hil_only: bool = False, success_only: bool = False,
+                       host_batch: bool = False):
         n_step = self._replan_steps  # critic reward window: one executed chunk
-        assert len(self) >= n_step, "Replay buffer size must be greater than the sample window"
+        assert len(self) > n_step, "Replay buffer size must be greater than the sample window"
         if not hasattr(self, "rng"):
             self.rng = jax.random.PRNGKey(self._seed or 42)
 
@@ -448,9 +472,9 @@ class PiReplayBuffer(Dataset):
             keys = [k for k in self.dataset_dict.keys() if k not in skipped]
 
         key, rng = jax.random.split(self.rng)
-        max_start = len(self) - n_step
+        starts = _sample_start_indices(len(self), self._capacity, self._insert_index, n_step)
         if hil_only:
-            eligible_indices = np.flatnonzero(self.dataset_dict["hil_chunk"][:max_start])
+            eligible_indices = starts[self.dataset_dict["hil_chunk"][starts]]
             if len(eligible_indices) == 0:
                 raise ValueError(
                     "No HIL-annotated action chunks available for hil_only sampling."
@@ -460,7 +484,7 @@ class PiReplayBuffer(Dataset):
             )
             indices = eligible_indices[np.asarray(sampled_positions)]
         elif success_only:
-            eligible_indices = np.flatnonzero(self.dataset_dict["is_success"][:max_start])
+            eligible_indices = starts[self.dataset_dict["is_success"][starts]]
             if len(eligible_indices) == 0:
                 self.rng = rng
                 return None
@@ -469,9 +493,8 @@ class PiReplayBuffer(Dataset):
             )
             indices = eligible_indices[np.asarray(sampled_positions)]
         else:
-            indices = jax.random.randint(
-                key, (batch_size,), minval=0, maxval=max_start
-            )
+            positions = jax.random.randint(key, (batch_size,), minval=0, maxval=len(starts))
+            indices = starts[np.asarray(positions)]
         self.rng = rng
 
         jax_dataset_dict = {k: self._gather(k, self.dataset_dict[k], indices) for k in keys}
@@ -551,6 +574,10 @@ class PiReplayBuffer(Dataset):
                 except (TypeError, ValueError):
                     return x
         
+        if host_batch:
+            # Gather destinations are reused. Own a snapshot so subsequent samples
+            # (including the actor batch/prefetch) cannot mutate a pending CPU batch.
+            return jax.tree.map(lambda x: np.array(x, copy=True), jax_dataset_dict)
         jax_dataset_dict = to_jax_array(jax_dataset_dict)
         # Host staging is reused next call: don't let it change under an in-flight copy.
         jax.block_until_ready(jax_dataset_dict)

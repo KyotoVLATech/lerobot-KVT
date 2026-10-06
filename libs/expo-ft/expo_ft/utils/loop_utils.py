@@ -28,17 +28,25 @@ class AsyncChunkSampler:
     the single-slot async path cannot represent, so it falls back to boundary-synchronous
     delayed inference from the executed history (sim-equivalent).
 
+    With ``executed_prefix=True``, the caller supplies hardware feedback via
+    ``record_executed``. Sampling waits at chunk boundaries so the prefix can
+    include clipping/filtering performed by the robot, with its delayed obs.
+
     Agents are immutable pytrees, so every method takes the current agent and returns
     the (rng-advanced) one, exactly like ``agent.sample_actions``.
     """
 
-    def __init__(self, agent, *, delay, replan_steps, sim_latency_ms=0.0, timer=None):
+    def __init__(self, agent, *, delay, replan_steps, sim_latency_ms=0.0, timer=None,
+                 executed_prefix=False):
         self.delay = int(delay)
         self.replan_steps = int(replan_steps)
         self.sim_latency_ms = float(sim_latency_ms)
         self.timer = timer
         self.use_pre_cache = hasattr(agent, "sample_pre_cache") and self.delay > 0
-        self.sync_mode = self.use_pre_cache and self.replan_steps < self.delay
+        self.executed_prefix = executed_prefix
+        # Hardware may clip/filter absolute joint targets. Their actual prefix is
+        # only known after dispatch, so wait for feedback before conditioning.
+        self.sync_mode = self.use_pre_cache and (self.replan_steps < self.delay or executed_prefix)
         self.async_enabled = self.use_pre_cache and not self.sync_mode
         self.executor = ThreadPoolExecutor(max_workers=1) if self.async_enabled else None
         self.prefix_cache = None  # executed window of the last chunk (normalized + padded)
@@ -54,6 +62,16 @@ class AsyncChunkSampler:
         """Once per control step with the fresh observation (history for sync mode)."""
         if self.sync_mode:
             self.obs_hist.append(observation)
+
+    def record_executed(self, agent, observation, action):
+        """Normalize hardware-confirmed actions for the next RTC prefix."""
+        if not self.use_pre_cache or not self.executed_prefix:
+            return
+        raw = {**observation, "actions": np.asarray(action)[None]}
+        row = np.asarray(agent.actor.input_transforms(raw)["actions"])[0]
+        padded_dim = agent.actor.model_config.action_dim
+        row = np.pad(row, (0, padded_dim - row.shape[-1]))
+        self.exec_hist.append(row)
 
     def launch(self, agent, observation, plan_len, action_type):
         """Start background inference once exactly ``delay`` actions remain in the plan."""
@@ -127,8 +145,9 @@ class AsyncChunkSampler:
             action_chunk, agent, sample_info = agent.sample_actions(
                 observation, precached=precached, delay=d_eff)
             self._simulate_latency()
-            for row in np.asarray(jax.device_get(sample_info["executed_padded"]))[:r]:
-                self.exec_hist.append(row)
+            if not self.executed_prefix:
+                for row in np.asarray(jax.device_get(sample_info["executed_padded"]))[:r]:
+                    self.exec_hist.append(row)
             self.prefix_cache = None
             return action_chunk, agent, sample_info
 

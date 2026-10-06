@@ -8,6 +8,7 @@ def get_config():
     # Prefix-conditioned BC fine-tuning (train_step_p1_prefix) so the inpainted
     # delayed inference is in-distribution.
     config.p1_use_prefix_conditioning = True
+    config.actor_microbatch_size = 0  # 0 = unsplit; does not change effective batch size
     config.init_temperature = 0.01
 
     config.q_edit_use_main_obs = False  # backup edit/Q-selection on the delayed (main-actor) obs when delay>0

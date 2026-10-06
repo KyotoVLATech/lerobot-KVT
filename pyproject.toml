@@ -88,6 +88,7 @@ dependencies = [
     "imageio[ffmpeg]>=2.34.0,<3.0.0",
     "termcolor>=2.4.0,<4.0.0",
     "websockets>=15.0.1",
+    "msgpack>=1.0.0,<2.0.0",
     "pyserial-asyncio>=0.6",
     "matplotlib>=3.10.8",
     "pyqt5>=5.15.11",

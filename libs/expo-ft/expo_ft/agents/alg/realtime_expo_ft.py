@@ -1,6 +1,9 @@
 from functools import partial
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 import dataclasses
+import mmap
+import tempfile
+from pathlib import Path
 
 import logging
 
@@ -36,6 +39,16 @@ from expo_ft.utils.augmentation import make_data_augmentation_fn
 import openpi.shared.array_typing as at
 import openpi.training.sharding as _sharding
 import openpi.training.utils as training_utils
+
+
+@partial(jax.jit, donate_argnums=(1,))
+def _target_actor_ema_host(params, target, tau):
+    return optax.incremental_update(params, target, jnp.asarray(tau, dtype=target.dtype))
+
+
+@partial(jax.jit, static_argnames=("size",))
+def _target_param_chunk(params, start, size):
+    return jax.lax.dynamic_slice_in_dim(params.reshape(-1), start, size)
 
 
 def _split_params(agent: Any) -> tuple[Any, dict[str, at.Params]]:
@@ -294,6 +307,8 @@ class RealTimeEXPOFTLearner(AgentLearner, struct.PyTreeNode):
     p1_use_prefix_conditioning: bool = struct.field(pytree_node=False, default=True)
     q_edit_use_main_obs: bool = struct.field(pytree_node=False, default=False)  # backup edit/Q-select on the delayed obs
     train_base_actor: bool = struct.field(pytree_node=False, default=True)  # False = freeze the pi0.5 actor
+    actor_microbatch_size: int = struct.field(pytree_node=False, default=0)
+    _target_actor_storage: Any = struct.field(pytree_node=False, default=None)
     critic_camera_keys: Tuple[str, ...] = struct.field(pytree_node=False, default=CRITIC_CAMERA_KEYS)
     # Noise-Q pre-filter (critic backup only)
     filter_N: int = struct.field(pytree_node=False, default=8)
@@ -363,6 +378,7 @@ class RealTimeEXPOFTLearner(AgentLearner, struct.PyTreeNode):
         p1_use_prefix_conditioning: bool = True,
         q_edit_use_main_obs: bool = False,
         train_base_actor: bool = True,
+        actor_microbatch_size: int = 0,
         critic_camera_keys: Tuple[str, ...] = CRITIC_CAMERA_KEYS,
         filter_N: int = 8,
         filter_temperature: float = 0.0,
@@ -598,6 +614,7 @@ class RealTimeEXPOFTLearner(AgentLearner, struct.PyTreeNode):
             p1_use_prefix_conditioning=p1_use_prefix_conditioning,
             q_edit_use_main_obs=q_edit_use_main_obs,
             train_base_actor=train_base_actor,
+            actor_microbatch_size=actor_microbatch_size,
             critic_camera_keys=tuple(critic_camera_keys),
             filter_N=filter_N,
             filter_temperature=filter_temperature,
@@ -983,7 +1000,7 @@ class RealTimeEXPOFTLearner(AgentLearner, struct.PyTreeNode):
 
         return self.replace(edit_actor=edit_actor, rng=rng), actor_info
     
-    def update_actor(self, batch: DatasetDict) -> Tuple[AgentLearner, Dict[str, float]]:
+    def update_actor(self, batch: DatasetDict, update_target: bool = True) -> Tuple[AgentLearner, Dict[str, float]]:
         actor_batch = self.actor.prepare_batch_for_actor(batch)
         
         # Ensure actor_batch has correct sharding
@@ -1002,16 +1019,26 @@ class RealTimeEXPOFTLearner(AgentLearner, struct.PyTreeNode):
                     batch["episode_step"] < self.replan_steps, 0, self.delay
                 ).astype(jnp.int32)
                 d = jax.device_put(d, self.actor.replicated_sharding)
-                new_train_state, info = self.actor.train_step_p1_prefix(
-                    key, self.actor_train_state, actor_batch, d,
-                )
+                if self.actor_microbatch_size:
+                    new_train_state, info = self.actor.train_step_p1_prefix(
+                        key, self.actor_train_state, actor_batch, d,
+                        self.actor_microbatch_size,
+                    )
+                else:
+                    new_train_state, info = self.actor.train_step_p1_prefix(
+                        key, self.actor_train_state, actor_batch, d,
+                    )
             else:
+                if self.actor_microbatch_size:
+                    raise ValueError("Actor accumulation requires prefix-conditioned training")
                 new_train_state, info = self.actor.train_step(key, self.actor_train_state, actor_batch)
 
         new_train_state_params = self.actor.get_params(new_train_state)
-        target_score_params = optax.incremental_update(
-            new_train_state_params, self.target_actor_params, self.actor_tau
-        )
+        target_score_params = self.target_actor_params
+        if update_target:
+            target_score_params = optax.incremental_update(
+                new_train_state_params, self.target_actor_params, self.actor_tau
+            )
 
         new_agent = self.replace(actor_train_state=new_train_state, target_actor_params=target_score_params, rng=rng)
         
@@ -1155,6 +1182,11 @@ class RealTimeEXPOFTLearner(AgentLearner, struct.PyTreeNode):
 
 
     def update(self, agent, batch: DatasetDict, utd_ratio: int, actor_batch: DatasetDict = None):
+        state = batch["state"]
+        if isinstance(state, np.ndarray) or (
+            isinstance(state, jax.Array) and all(d.platform == "cpu" for d in state.devices())
+        ):
+            return agent._update_streamed(batch, utd_ratio, actor_batch)
         # Drop stale inference copies before JIT; rebuild after so rollouts use new weights.
         train_actor = bool(self.train_base_actor)  # jit static: False freezes the pi0.5 actor
         new_agent, info = self.replace(_infer_cache=None)._update_jit(
@@ -1162,6 +1194,183 @@ class RealTimeEXPOFTLearner(AgentLearner, struct.PyTreeNode):
             train_actor=train_actor,
         )
         return new_agent.cache_infer_params(), info
+
+    def _update_streamed(self, batch, utd_ratio, actor_batch):
+        """Same UTD sequence, with only one critic minibatch resident on GPU.
+
+        Batch augmentation keys match _update_jit, including its full-batch
+        per-image key stream. Synchronization prevents queued transfers from
+        silently recreating a full UTD batch on the accelerator.
+        """
+        total = batch["actions"].shape[0]
+        if total < 1 or utd_ratio < 1 or total % utd_ratio:
+            raise ValueError("Critic batch must be divisible by a positive UTD ratio")
+        size = total // utd_ratio
+        agent = self.replace(_infer_cache=None)
+        rng, key1 = jax.random.split(agent.rng)
+        rng, key2 = jax.random.split(rng)
+        if agent.delay > 0 and "next_delayed_image" in batch:
+            rng, key3 = jax.random.split(rng)
+        else:
+            key3 = key2
+        agent = agent.replace(rng=rng)
+        for offset in range(0, total, size):
+            host_slice = jax.tree.map(lambda x: x[offset:offset + size], batch)
+            device_slice = jax.device_put(host_slice, self.data_sharding)
+            prepared = agent.replace(target_actor_params=None)._prepare_streamed_critic_batch(
+                device_slice, (key1, key2, key3), offset, total,
+            )
+            jax.block_until_ready(prepared)
+            del device_slice, host_slice
+            agent, critic_info = agent._streamed_critic_step(prepared)
+            jax.block_until_ready((agent, critic_info))
+            logging.getLogger(__name__).info("Streamed critic update %d/%d completed", offset // size + 1, utd_ratio)
+            if offset + size < total:
+                del prepared
+
+        actor_info = {}
+        if agent.train_base_actor:
+            if agent.actor_success_only:
+                if actor_batch is None:
+                    raise ValueError("Success-only actor training requires an actor batch")
+                device_actor_batch = jax.device_put(actor_batch, self.data_sharding)
+                agent, actor_info = agent._streamed_actor_step(device_actor_batch)
+                jax.block_until_ready((agent, actor_info))
+                logging.getLogger(__name__).info("Streamed base policy update completed")
+                del device_actor_batch
+            else:
+                agent, actor_info = agent._streamed_base_actor_step(prepared)
+                jax.block_until_ready((agent, actor_info))
+        if agent.n_edit_samples > 0:
+            agent, edit_info = agent._streamed_edit_step(prepared)
+            jax.block_until_ready((agent, edit_info))
+            actor_info = {**actor_info, **edit_info}
+        del prepared
+        return agent.cache_infer_params(), {**actor_info, **critic_info}
+
+    @partial(jax.jit, static_argnames=("total_batch_size",))
+    def _prepare_streamed_critic_batch(self, batch, keys, sample_offset, total_batch_size):
+        batch = batch.copy()
+        for field, key in zip(("image", "next_image", "next_delayed_image"), keys):
+            if field == "next_delayed_image" and not (self.delay > 0 and field in batch):
+                continue
+            batch[field] = self.data_augmentation_fn(
+                key, batch[field], sample_offset=sample_offset, total_batch_size=total_batch_size,
+            )
+        return prepare_critic_batch(
+            batch, self.actor.model_config.action_dim, self.action_dim, self.state_dim,
+            self.action_horizon, self.replan_steps, self.critic_camera_keys,
+        )
+
+    def _streamed_critic_step(self, batch):
+        states, rng, info = self.replace(target_actor_params=None)._streamed_critic_states(batch)
+        critic, target_critic, filter_critic, batch_encoder = states
+        return self.replace(critic=critic, target_critic=target_critic,
+                            filter_critic=filter_critic, batch_encoder=batch_encoder, rng=rng), info
+
+    @jax.jit
+    def _streamed_critic_states(self, batch):
+        # Do not return the unchanged VLA/optimizer/target weights from this JIT.
+        # Returning the entire learner forces large pass-through buffer copies.
+        agent, info = self.update_critic(batch)
+        return (agent.critic, agent.target_critic, agent.filter_critic, agent.batch_encoder), agent.rng, info
+
+    def _streamed_actor_step(self, batch):
+        skeleton = self._actor_update_skeleton()
+        state, rng, info = skeleton._streamed_actor_states(self.actor_train_state, batch)
+        logging.getLogger(__name__).info("Actor JIT variants: %d", type(self)._streamed_actor_states._cache_size())
+        target = self._update_target_actor_on_host(state)
+        return self.replace(actor_train_state=state, target_actor_params=target, rng=rng), info
+
+    @partial(jax.jit, donate_argnums=(1,))
+    def _streamed_actor_states(self, actor_state, batch):
+        self = self.replace(actor_train_state=actor_state)
+        batch = batch.copy()
+        rng, key = jax.random.split(self.rng)
+        batch["image"] = self.data_augmentation_fn(key, batch["image"])
+        batch = prepare_critic_batch(
+            batch, self.actor.model_config.action_dim, self.action_dim, self.state_dim,
+            self.action_horizon, self.replan_steps, self.critic_camera_keys,
+        )
+        agent, info = self.replace(rng=rng).update_actor(batch, update_target=False)
+        return agent.actor_train_state, agent.rng, info
+
+    def _streamed_base_actor_step(self, batch):
+        skeleton = self._actor_update_skeleton()
+        state, rng, info = skeleton._streamed_base_actor_states(self.actor_train_state, batch)
+        target = self._update_target_actor_on_host(state)
+        return self.replace(actor_train_state=state, target_actor_params=target, rng=rng), info
+
+    def _actor_update_skeleton(self):
+        # Exclude unrelated optimizer states/counters from the actor JIT input.
+        # Their first-update type changes must not recompile the full VLA graph.
+        return self.replace(actor_train_state=None, target_actor_params=None, _target_actor_storage=None,
+                            critic=None, target_critic=None, filter_critic=None,
+                            batch_encoder=None, edit_actor=None, temp=None,
+                            actor_tau=None, tau=None, discount=None,
+                            target_entropy=None, entropy_scale=None)
+
+    @partial(jax.jit, donate_argnums=(1,))
+    def _streamed_base_actor_states(self, actor_state, batch):
+        self = self.replace(actor_train_state=actor_state)
+        agent, info = self.update_actor(batch, update_target=False)
+        return agent.actor_train_state, agent.rng, info
+
+    def offload_target_actor(self):
+        """Target policy is checkpoint/EMA state, unused by current backups/rollouts."""
+        storage = tempfile.TemporaryDirectory(prefix="iloha-rl-target-", dir="/tmp")
+        index = 0
+
+        def store_tensor(source):
+            nonlocal index
+            destination = np.memmap(Path(storage.name) / f"{index}.bin", mode="w+",
+                                    shape=source.shape, dtype=source.dtype)
+            index += 1
+            flat = destination.reshape(-1)
+            for start in range(0, source.size, 4 * 1024 * 1024):
+                size = min(4 * 1024 * 1024, source.size - start)
+                chunk = _target_param_chunk(source, jnp.asarray(start, jnp.int32), size)
+                flat[start:start + size] = np.asarray(jax.device_get(chunk))
+                destination.flush()
+                destination._mmap.madvise(mmap.MADV_DONTNEED)
+            return destination
+
+        target = jax.tree.map(store_tensor, self.target_actor_params)
+        logging.getLogger(__name__).info("Target policy scratch storage: %s", storage.name)
+        return self.replace(target_actor_params=target, _target_actor_storage=storage)
+
+    def _update_target_actor_on_host(self, state):
+        cpu = jax.devices("cpu")[0]
+        tau = jax.device_put(self.actor_tau, cpu)
+
+        def update_leaf(params, target):
+            # Bound CPU transfer/EMA scratch to 4M elements, including the large
+            # stacked LLM tensors. Disk-backed target pages are reclaimable.
+            flat = target.reshape(-1)
+            for start in range(0, params.size, 4 * 1024 * 1024):
+                size = min(4 * 1024 * 1024, params.size - start)
+                new = _target_param_chunk(params, jnp.asarray(start, jnp.int32), size)
+                new = jax.device_put(new, cpu)
+                old = jax.device_put(flat[start:start + size], cpu)
+                result = _target_actor_ema_host(new, old, tau)
+                jax.block_until_ready(result)
+                flat[start:start + size] = np.asarray(result)
+                if isinstance(target, np.memmap):
+                    target.flush()
+                    target._mmap.madvise(mmap.MADV_DONTNEED)
+            return target
+
+        return jax.tree.map(update_leaf, self.actor.get_params(state), self.target_actor_params)
+
+    def _streamed_edit_step(self, batch):
+        edit_actor, temp, rng, info = self.replace(target_actor_params=None)._streamed_edit_states(batch)
+        return self.replace(edit_actor=edit_actor, temp=temp, rng=rng), info
+
+    @jax.jit
+    def _streamed_edit_states(self, batch):
+        agent, info = self.update_edit_actor(batch)
+        agent, temperature_info = agent.update_temperature(info["entropy"])
+        return agent.edit_actor, agent.temp, agent.rng, {**info, **temperature_info}
 
 
     @partial(jax.jit, static_argnames=("utd_ratio", "train_actor"))

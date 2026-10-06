@@ -261,6 +261,7 @@ def train_step_p1_prefix(
     state: training_utils.TrainState,
     batch: tuple,
     delay_spec: jnp.ndarray,
+    microbatch_size: int = 0,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     """Prefix-conditioned flow-matching step (RTC-SFT, arXiv 2512.05964).
 
@@ -274,7 +275,7 @@ def train_step_p1_prefix(
     model = nnx.merge(state.model_def, state.params)
     model.train()
 
-    def loss_fn(model, rng, observation, actions):
+    def prepare_loss_inputs(rng, observation, actions):
         preprocess_rng, noise_rng, time_rng, delay_rng = jax.random.split(rng, 4)
         obs = _model.preprocess_observation(preprocess_rng, observation, train=True)
         B, H, _ = actions.shape
@@ -293,19 +294,46 @@ def train_step_p1_prefix(
         x_t = t_exp * noise + (1 - t_exp) * actions                       # prefix slots -> actions
         # u_t on prefix slots is unused: the loss is masked to the postfix.
         u_t = noise - actions
+        return (obs, x_t, time_per_pos, u_t, postfix_mask)
+
+    def loss_fn(model, inputs, denominator):
+        obs, x_t, time_per_pos, u_t, postfix_mask = inputs
         v_t = _forward_get_velocity(model, obs, x_t, time_per_pos)        # (B, H, D)
         per_pos = jnp.mean(jnp.square(v_t - u_t), axis=-1)                # (B, H)
         masked = per_pos * postfix_mask                                   # (B, H)
-        denom = jnp.maximum(postfix_mask.sum(), 1.0)
-        return masked.sum() / denom
+        return masked.sum() / denominator
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
+    # Draw preprocessing/noise/time once for the full effective batch. Slicing
+    # afterward preserves the exact RNG draws used by the unsplit update.
+    inputs = prepare_loss_inputs(train_rng, observation, actions)
+    denominator = jnp.maximum(inputs[-1].sum(), 1.0)
 
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(
-        model, train_rng, observation, actions
-    )
+    if microbatch_size:
+        size = actions.shape[0]
+        if microbatch_size < 1 or size % microbatch_size:
+            raise ValueError("Actor batch size must be divisible by microbatch_size")
+        count = size // microbatch_size
+        chunks = jax.tree.map(lambda x: x.reshape((count, microbatch_size) + x.shape[1:]), inputs)
+        initial_grads = jax.tree.map(jnp.zeros_like, state.params.filter(config.trainable_filter))
+
+        def accumulate(carry, micro_inputs):
+            total_loss, total_grads = carry
+            # Every microbatch sees the same weights. No optimizer/EMA update
+            # happens inside the scan; the denominator is global, not per chunk.
+            micro_model = nnx.merge(state.model_def, state.params)
+            micro_model.train()
+            micro_loss, micro_grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(
+                micro_model, micro_inputs, denominator,
+            )
+            return (total_loss + micro_loss,
+                    jax.tree.map(jnp.add, total_grads, micro_grads)), None
+
+        (loss, grads), _ = jax.lax.scan(accumulate, (jnp.array(0., jnp.float32), initial_grads), chunks)
+    else:
+        loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, inputs, denominator)
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -380,7 +408,6 @@ def build_pi05(config, seed, mesh, data_sharding, replicated_sharding,
 
     rng = jax.random.PRNGKey(seed)
     init_rng, rng = jax.random.split(rng)
-    target_rng, rng = jax.random.split(rng)
 
     actor, actor_train_state, _ = Pi05Agent.initialize(
         pi05_train_config,
@@ -393,10 +420,17 @@ def build_pi05(config, seed, mesh, data_sharding, replicated_sharding,
         freeze_pi05_encoder=freeze_encoder,
         infer_device=jax.devices()[0],
     )
+    # Keep the JIT input type stable across the first optimizer update.
+    actor_train_state = dataclasses.replace(
+        actor_train_state, step=jnp.asarray(actor_train_state.step, dtype=jnp.int32),
+    )
     if resume:
         target_actor_params = actor.get_params(actor_train_state)
     else:
-        target_actor_params = actor.init_target_params(target_rng, resume=resume)
+        # Start the target from the restored online weights. Rebuilding a second
+        # full model also allocates unused optimizer state and initialization
+        # intermediates; copying only params preserves the checkpoint values.
+        target_actor_params = jax.tree.map(lambda x: x.copy(), actor.get_params(actor_train_state))
 
     metadata = dict(
         action_horizon=pi05_train_config.model.action_horizon,
@@ -456,6 +490,7 @@ class Pi05Agent(Model):
                           self.replicated_sharding),
             out_shardings=(self.train_state_sharding, self.replicated_sharding),
             donate_argnums=(1,),
+            static_argnames=("microbatch_size",),
         )
 
     def _build_input_transform_pipeline(self, normalize: bool = True):
@@ -695,4 +730,3 @@ class Pi05Agent(Model):
             transformed_inputs, train_state, key, prefix_padded, num_samples, noise=noise,
         )
         return self._unpad_actions(x_clean), None
-

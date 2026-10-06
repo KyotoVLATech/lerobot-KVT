@@ -1,3 +1,4 @@
+import itertools
 import os
 
 import h5py
@@ -28,7 +29,8 @@ def process_droid_dataset(
     datapath, 
     task_config, 
     episode_indices = None,
-    num_data = None):
+    num_data = None,
+    streaming = False):
     ep_dirs = _discover_episode_dirs(datapath)
     if episode_indices is not None:
         ep_dirs = [ep_dirs[i] for i in episode_indices if 0 <= i < len(ep_dirs)]
@@ -37,7 +39,36 @@ def process_droid_dataset(
     
     print(f"Find {len(_discover_episode_dirs(datapath))} episodes; using {len(ep_dirs)}")
 
-    data = []
+    dataset = HDF5DemoDataset(ep_dirs, task_config)
+    return dataset if streaming else list(dataset)
+
+
+class HDF5DemoDataset:
+    """Same ordered transitions as the eager loader, retaining one episode at a time."""
+
+    def __init__(self, ep_dirs, task_config):
+        self.ep_dirs = tuple(ep_dirs)
+        self.task_config = task_config
+        self.length = 0
+        for ep in ep_dirs:
+            with h5py.File(os.path.join(ep, "traj.hdf5"), "r") as f:
+                self.length += len(f["action"][task_config.action_space])
+
+    def __len__(self):
+        return self.length
+
+    def __iter__(self):
+        return _iter_droid_episodes(self.ep_dirs, self.task_config)
+
+    def __getitem__(self, index):
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        return next(itertools.islice(iter(self), index, index + 1))
+
+
+def _iter_droid_episodes(ep_dirs, task_config):
     for ep in tqdm(ep_dirs):
         with h5py.File(os.path.join(ep, "traj.hdf5"), "r") as f:
             def load_recursive(group):
@@ -75,12 +106,10 @@ def process_droid_dataset(
                        for k, v in obs.items()}
             
             for t in range(T):
-                data.append({
+                yield {
                     "observations": extract_t(ep_obs, t),
                     "actions": ep_actions[t],
                     "rewards": ep_rewards[t],
                     "masks": 1 - ep_dones[t],
                     "dones": ep_dones[t]
-                })
-
-    return data
+                }

@@ -2,6 +2,8 @@
 
 import jax.numpy as jnp
 
+from expo_ft.utils.camera_keys import CRITIC_CAMERA_KEYS as CRITIC_CAMERA_KEYS
+
 # Cameras the critic encoder sees, channel-stacked in this (sorted) order. The
 # critic obs is a single tensor, so this set + order MUST be identical across
 # every site that builds it (prepare_critic_batch, extract_critic_fields, and
@@ -9,7 +11,6 @@ import jax.numpy as jnp
 #
 # Default is upstream's set (side + wrist); a task can opt into all three slots via
 # `config.critic_camera_keys`.
-CRITIC_CAMERA_KEYS = ("base_0_rgb", "left_wrist_0_rgb")
 
 
 def stack_critic_cameras(image_dict, camera_keys=CRITIC_CAMERA_KEYS):
