@@ -161,9 +161,8 @@ async def main(args):
         print("データセット検証完了（ロボット接続なし）")
         return
 
-    # 接続時の原点復帰から、根元の原点を左ID1は-90度、右ID4は+90度に設定。
+    # 左ID1の原点を-90度に設定。右ID4はright_settingsの設定を使用する。
     left_settings.Robstride01Constants.DEFAULT_OFFSET = -np.pi / 2
-    right_settings.Robstride01Constants.DEFAULT_OFFSET = np.pi / 2
     # 2026-09-11に全開状態で実測した位置。グリッパー指令0を全開にする。
     left_settings.Dynamixel04Constants.CONTROL_PARAMS.offset = 2394  # ID4: 210.41015625度
     right_settings.Dynamixel04Constants.CONTROL_PARAMS.offset = 2365  # ID8: 207.861328125度
@@ -208,8 +207,8 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_path", required=True, help="記録データセットのパス（例: datasets/iloha-0）")
     parser.add_argument("--episode_index", type=int, default=0, help="再生するエピソード番号（0始まり）")
     parser.add_argument("--dry_run", action="store_true", help="ロボットに接続せずデータセットを検証")
-    parser.add_argument("--base_speed", type=float, default=0.8, help="全体のベース速度倍率（正数、既定: 1）")
-    parser.add_argument("--max_speedup", type=float, default=1.8,
+    parser.add_argument("--base_speed", type=float, default=1.0, help="全体のベース速度倍率（正数、既定: 1）")
+    parser.add_argument("--max_speedup", type=float, default=1.0,
                         help="グリッパー動作から離れた区間の追加倍率上限（1以上、既定: 1=無効）")
     parser.add_argument("--gripper_margin", type=float, default=0.5,
                         help="グリッパー動作前後でベース速度を保つ記録時間の秒数（既定: 0.5）")
@@ -222,4 +221,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n再生を中断しました")
 
-# uv run iloha_catch_replay.py --dataset_path datasets/iloha-common
+# uv run iloha_catch_replay.py --dataset_path datasets/iloha-dataset-good
