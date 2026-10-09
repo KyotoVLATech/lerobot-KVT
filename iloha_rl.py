@@ -18,8 +18,8 @@
   prompt:      タスク指示文
 行動は ALOHA 座標の絶対関節角 14次元。
 
-成功・失敗判定はキーボード入力（エピソード中に 1+Enter で成功、0+Enter で失敗）。
---episode_time_s を超えると失敗として終了する。
+既定では時間切れまたはEnterでエピソードを終了し、待機状態で人間が0〜1の報酬を入力する。
+従来のエピソード中の成功・失敗判定は --reward_mode binary で利用できる。
 
 使い方:
   # 1. GPUマシンで Learner を起動（libs/expo-ft で）
@@ -148,7 +148,7 @@ class KeyboardInput:
 # ---------------------------------------------------------------------------
 class IlohaRLEnv:
     """expo-ft の DroidEnv と同じ契約（reset / step / get_observation / get_info_for_step）を
-    Iloha 実機で提供する。reward は成功時のみ 1、done 時は mask=0。"""
+    Iloha 実機で提供する。reward は終了後の採点値、done 時は mask=0。"""
 
     def __init__(self, robot: Iloha, keyboard: KeyboardInput, args, dataset: LeRobotDataset | None = None):
         self.robot = robot
@@ -168,6 +168,7 @@ class IlohaRLEnv:
         self.steps = 0
         self.episode_start_t = None
         self.verdict: bool | None = None  # True=成功, False=失敗, None=継続中
+        self.episode_reward: float | None = None
         self.last_obs_raw = None
         self.frames_saved = 0
 
@@ -187,8 +188,9 @@ class IlohaRLEnv:
     async def reset(self) -> dict:
         if self.episode_idx > 0:
             self._finish_episode()
-            await stop_motors_for_standby(self.robot, motor_disable_delay_s=self.args.standby_motor_disable_delay_s)
-            self.motors_in_standby = True
+            if not self.motors_in_standby:
+                await stop_motors_for_standby(self.robot, motor_disable_delay_s=self.args.standby_motor_disable_delay_s)
+                self.motors_in_standby = True
         # 初回も含め、毎エピソード人が環境（タオル配置）を整えてから開始する
         self.keyboard.clear()
         await self.keyboard.wait_line(
@@ -204,15 +206,20 @@ class IlohaRLEnv:
         self.keyboard.clear()
         self.episode_idx += 1
         print(f"\n--- エピソード {self.episode_idx} 開始（最大{self.args.episode_time_s:.0f}秒）---")
-        print("  判定: 1+Enter=成功 / 0+Enter=失敗（時間切れは失敗）")
+        if getattr(self.args, "reward_mode", "binary") == "terminal-score":
+            print("  Enterで終了（時間切れでも終了）。終了後に0〜1の報酬を入力してください")
+        else:
+            print("  判定: 1+Enter=成功 / 0+Enter=失敗（時間切れは失敗）")
         return await self.get_observation()
 
     def _finish_episode(self):
-        result = "成功" if self.verdict else "失敗"
+        score_mode = getattr(self.args, "reward_mode", "binary") == "terminal-score"
+        result = f"報酬 {self.episode_reward:.3f}" if score_mode and self.episode_reward is not None else (
+            "成功" if self.verdict else "失敗"
+        )
         if self.verdict:
             self.num_success += 1
-        print(f"エピソード {self.episode_idx}: {result}（{self.steps}ステップ）"
-              f" 累計成功 {self.num_success}/{self.episode_idx}")
+        print(f"エピソード {self.episode_idx}: {result}（{self.steps}ステップ）")
         if self.dataset is not None:
             if self.frames_saved > 0:
                 self.dataset.save_episode()
@@ -235,6 +242,14 @@ class IlohaRLEnv:
         for i, joint_name in enumerate(self.state_names):
             raw[joint_name] = float(state[i])
         self.last_obs_raw = raw
+        if getattr(self.args, "observation_format", "pi05") == "xvla":
+            # Preserve the evaluation image geometry; the saved XVLA processor/model
+            # owns resizing and normalization (the pi05 resize is different).
+            return {
+                **{f"observation.images.{cam}": np.ascontiguousarray(raw[cam]) for cam in CAMERA_NAMES},
+                "observation.state": state,
+                "task": self.prompt,
+            }
         obs = {
             f"{cam}_image": np.ascontiguousarray(
                 resize_with_pad(raw[cam], MODEL_IMAGE_SIZE, MODEL_IMAGE_SIZE).transpose(2, 0, 1)
@@ -246,24 +261,55 @@ class IlohaRLEnv:
         return obs
 
     def get_info_for_step(self):
+        if getattr(self, "episode_idx", 1) == 0:
+            return False, False, 0.0, 1.0
+        score_mode = getattr(self.args, "reward_mode", "binary") == "terminal-score"
         if self.verdict is None:
             key = self.keyboard.poll()
             while key is not None and self.verdict is None:
-                if key == "1":
+                if score_mode and key in ("", "end"):
+                    self.verdict = False  # terminal, awaiting the asynchronous rating prompt
+                elif not score_mode and key == "1":
                     self.verdict = True
-                elif key == "0":
+                elif not score_mode and key == "0":
                     self.verdict = False
                 key = self.keyboard.poll()
             elapsed = (0.0 if self.episode_start_t is None
                        else time.perf_counter() - self.episode_start_t)
             if self.verdict is None and elapsed >= self.args.episode_time_s:
-                print(f"エピソード時間（{self.args.episode_time_s}秒）に達しました → 失敗")
+                print(f"エピソード時間（{self.args.episode_time_s}秒）に達しました → 終了")
                 self.verdict = False
         done = self.verdict is not None
-        success = bool(self.verdict)
-        reward = 1.0 if success else 0.0
+        success = (self.episode_reward == 1.0) if score_mode else bool(self.verdict)
+        reward = float(self.episode_reward or 0.0) if score_mode else (1.0 if success else 0.0)
         mask = 0.0 if done else 1.0
         return done, success, reward, mask
+
+    async def resolve_terminal_reward(self):
+        """Stop the robot, then obtain one finite [0, 1] score after termination."""
+        if (getattr(self.args, "reward_mode", "binary") != "terminal-score"
+                or self.verdict is None or self.episode_reward is not None):
+            return
+        if not self.motors_in_standby:
+            await stop_motors_for_standby(
+                self.robot, motor_disable_delay_s=self.args.standby_motor_disable_delay_s
+            )
+            self.motors_in_standby = True
+        # Clear any episode-time input; the score must follow the explicit prompt.
+        self.keyboard.clear()
+        while self.episode_reward is None:
+            line = await self.keyboard.wait_line("エピソード終了。報酬を0〜1で入力してください（例: 0.7）:")
+            try:
+                score = float(line)
+            except ValueError:
+                print("0〜1の数値を入力してください")
+                continue
+            if not np.isfinite(score) or not 0.0 <= score <= 1.0:
+                print("0〜1の有限な数値を入力してください")
+                continue
+            self.episode_reward = score
+            self.verdict = score == 1.0
+            print(f"エピソード {self.episode_idx} の報酬: {score:.3f}")
 
     # --- action -----------------------------------------------------------
     async def step(self, action) -> dict:
@@ -348,13 +394,24 @@ async def serve_learner(websocket, env: IlohaRLEnv, args):
                 response = {"status": "success", "action": result["executed_action"].tolist(), "action_type": "policy"}
             elif op == "get_observation":
                 obs = await env.get_observation()
+                env.get_info_for_step()
+                await env.resolve_terminal_reward()
                 done, success, reward, mask = env.get_info_for_step()
                 response = {"status": "success", "observation": obs, "done": bool(done),
                             "success": bool(success), "reward": float(reward), "mask": float(mask)}
             elif op == "get_info_for_step":
+                env.get_info_for_step()
+                await env.resolve_terminal_reward()
                 done, success, reward, mask = env.get_info_for_step()
                 response = {"status": "success", "done": bool(done), "success": bool(success),
                             "reward": float(reward), "mask": float(mask)}
+            elif op == "standby":
+                if not env.motors_in_standby:
+                    await stop_motors_for_standby(
+                        env.robot, motor_disable_delay_s=env.args.standby_motor_disable_delay_s
+                    )
+                    env.motors_in_standby = True
+                response = {"status": "success"}
             elif op == "render":
                 response = {"status": "success", "frame": await env.render()}
             else:
@@ -428,6 +485,9 @@ async def main(args):
                 print("Learner との接続が切れました。5秒後に再接続します")
             except (OSError, websockets.exceptions.WebSocketException) as e:
                 print(f"Learner に接続できません（{e}）。5秒後に再試行します")
+            if not env.motors_in_standby:
+                await stop_motors_for_standby(robot, motor_disable_delay_s=args.standby_motor_disable_delay_s)
+                env.motors_in_standby = True
             await asyncio.sleep(5)
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n中断されました")
@@ -456,11 +516,15 @@ if __name__ == "__main__":
     parser.add_argument("--task", type=str, default=DEFAULT_PROMPT,
                         help="タスク指示文。RTC-SFT の学習時と同じ文にすること")
     parser.add_argument("--fps", type=int, default=30, help="制御周波数（Learner の control_hz と一致させる）")
+    parser.add_argument("--observation_format", choices=["pi05", "xvla"], default="pi05",
+                        help="xvla: iloha_eval.py と同じ元画像を通常EXPO-FTサーバーへ送信")
     parser.add_argument("--state_source", type=str, default="measured", choices=["measured", "command"],
                         help="Policyに渡すロボット状態。measured=モータ実測値（デフォルト）、"
                              "command=直前の指令値(old_action)。学習データ(iloha_server.py)は command で記録されている")
     parser.add_argument("--episode_time_s", type=float, default=30.0,
-                        help="1エピソードの最大時間（秒）。超えると失敗扱い（デフォルト: 30）")
+                        help="1エピソードの最大時間（秒）。終了後に採点する（デフォルト: 30）")
+    parser.add_argument("--reward_mode", choices=["terminal-score", "binary"], default="terminal-score",
+                        help="terminal-score: エピソード終了後に人間が0〜1の報酬を入力（既定）")
     parser.add_argument("--save_data", action="store_true", help="ロールアウトを LeRobotDataset として保存する")
     parser.add_argument("--output_root", type=str, default="datasets/rl", help="保存先ルート（デフォルト: datasets/rl）")
     parser.add_argument("--disable_robot_relative_safety", action="store_true",

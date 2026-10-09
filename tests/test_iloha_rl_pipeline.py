@@ -54,6 +54,7 @@ class IlohaEpisodeTests(unittest.TestCase):
             absolute_mode_delta_threshold=.2,
         )
         self.env = env_class(self.robot, keyboard, args)
+        self.env.episode_idx = 1  # These tests exercise an active episode, after reset.
 
     def test_timeout_uses_elapsed_time_instead_of_step_count(self):
         self.env.episode_start_t = 100.
@@ -185,6 +186,8 @@ class UpdateBatchTests(unittest.TestCase):
 
             class Agent:
                 rng = 42
+                actor_train_state = SimpleNamespace(step=0)
+                critic = SimpleNamespace(step=0)
 
                 def replace(self, **kwargs):
                     return self
@@ -202,8 +205,8 @@ class UpdateBatchTests(unittest.TestCase):
                 "sink": SimpleNamespace(flush_transitions=lambda: None),
                 "FLAGS": SimpleNamespace(tqdm=False, utd_ratio=20),
                 "tqdm": SimpleNamespace(tqdm=lambda seq, **kwargs: seq),
-                "time": time, "get_batch_info": lambda batch: {},
-                "jax": SimpleNamespace(device_put=lambda value, sharding: value),
+                "time": time, "logging": logging, "get_batch_info": lambda batch: {},
+                "jax": SimpleNamespace(device_put=lambda value, sharding: value, device_get=lambda value: value),
                 "replicated_sharding": None,
                 "training_log": SimpleNamespace(record_update_time=lambda *args: None),
             }
